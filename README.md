@@ -1,4 +1,4 @@
-# Ninboy Hat for macOS
+# NinBoy Hat for macOS
 
 Native Apple Silicon (ARM64 / Metal 4) compilation enhancements, crash fixes, keyboard/mouse input overhaul, and performance optimizations for *The Legend of Zelda: Ocarina of Time* (Switch 2 / NVN2).
 
