@@ -1,0 +1,1223 @@
+diff --git a/dm/games/0400486024DEC000/game.tsv b/dm/games/0400486024DEC000/game.tsv
+index 5496379..c67d781 100644
+--- a/dm/games/0400486024DEC000/game.tsv
++++ b/dm/games/0400486024DEC000/game.tsv
+@@ -57,8 +57,11 @@ gmem_skip	on
+ # Pool tables give a finalized texture ID with no view the dummy instead of making its texture again: about 2.5 GB at the house-to-forest change (upstream #1393, nvn_mtl.m pool_skip_retired)
+ pool_skip_retired	on
+ # Guest copies of textures in CPU_NO_ACCESS pools (render and depth targets the game cannot read) given back once their GPU copy exists (upstream #1447, nvn_mtl.m rel_*): about 550 MB outdoors.
+-# 2: also CPU-visible copies, pages unwritten since their upload (1.85 GB more in Kokiri Forest: peak 7.0 → 5.2 GB with the iPhone's guest files); no texture lost and no problem seen in a 4-minute play test
+-tex_release	2
++# Level 1 gives back CPU_NO_ACCESS pool storage while preventing the magenta/black textures after area changes that Level 2 causes.
++tex_release	1
++# As Tears of the Kingdom: the terrain's height, blend and hole maps are written by the CPU into textures after they are created.
++tex_flush_upload	on
++tex_dirty_upload	on
+ # Large block-compressed textures from the game files kept without their finest level on the GPU (tex_soft, ported from the plumber-racer-2 fork)
+ tex_soft	on
+ # rt_drop (render targets taken over by a later-drawn one become 1x1 stand-ins, nvn_mtl.m rtd_sweep) is off: footprint 8.9 → 7.1 GB at the Kokiri Forest doorway, but the game still
+@@ -71,8 +74,9 @@ op_mode	handheld
+ # offline archive (the A20's architecture name is not known here); the launcher's pipeline prebuild builds the bases once on the first start and keeps them
+ pso_mtl4	on
+ # Frame rate: the host steps the game in whole vsyncs (patches.py FRAME_STEP: the frame-rate controller's interval and fps follow the host's step), so the launcher's Frame rate
+-# setting offers 30 and 60. At 30 every frame is held two vsyncs (33.3 ms) and the game's own 30 fps mode steps its time by two, so it runs at full speed
+-fps_target	60
++# setting offers 30, 60, and unlocked. At 30 every frame is held two vsyncs (33.3 ms) and the game's own 30 fps mode steps its time by two, so it runs at full speed
++fps_target	30
++fps_hold	off
+ # The iPhone's touch gamepad starts in the full (3D) layout: the D-pad, L3 / R3 and the right stick, which turns the camera (a drag in the right third of the screen); the simple
+ # layout has no right stick. A layout the player switches to in the game menu is kept
+ pad_layout	native
+@@ -88,7 +92,7 @@ upscaler_chain	f8965bffbdf51d78,d17eefaff4f0bc23,a335c1db6270c355>aad7ea7e5c02f4
+ rt_lossy	on
+ # The game's compute dispatches with no barrier of its between them run side by side (nvn_mtl.m dispatch_enc): 117 at the start of a frame in Kokiri Forest waited each for the one
+ # before, 5.7 ms; side by side 3.7 ms, the frame 27.1 -> 24.9 ms (docked, Apple M4 Pro), the picture within run-to-run noise (from the Mighty Green Kokiri Kid fork, 5208584a)
+-dispatch_overlap	off
++dispatch_overlap	on
+ res_presets	on
+ frame_wg	off
+ present_snap	on
+diff --git a/dm/games/settings.tsv b/dm/games/settings.tsv
+index 3388072..ca56fdb 100644
+--- a/dm/games/settings.tsv
++++ b/dm/games/settings.tsv
+@@ -14,22 +14,25 @@
+ #   label, note  the setting's name and the line under it (may be empty; only for a setting with a cost: latency, memory, heat)
+ #   meta      optional, key=value pairs separated by ; (settings.py META lists the keys; docs/frontends.md, The settings list, describes them):
+ #             level=basic  a setting a front end shows first;  needs=<VAR>=<value>  a sub-setting, drawn only while the row that sets <VAR> has that value
+-DM_FPS_TARGET	choice	30=30 fps,60=60 fps,120=120 fps?DM_GAME_FPS_MAX==120&platform:mac	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=0	Game	Frame rate		level=basic
++DM_FPS_TARGET	choice	30=30 fps (Lock),60=60 fps (Lock),0=Unlocked / Unlimited,120=120 fps?DM_GAME_FPS_MAX==120&platform:mac	DM_GAME_FPS_TARGET	DM_GAME_FPS_TARGET!=0	Game	Frame rate	Locks the frame rate to 30 fps, 60 fps, or runs uncapped.	level=basic
+ DM_DYNAMIC_RESOLUTION	toggle	-	0	fixups:DYNAMIC_RESOLUTION	Game	Dynamic resolution	Adjusts resolution between 70% and 100% under load. Turn off to keep full resolution for the selected console mode.
+ DM_RENDER_SCALE	range	0.5:1.0:0.05	1.0	fixups:RENDER_SCALE	Game	Render scale		level=basic
+ DM_OPMODE	choice	1=Docked,0=Handheld	DM_GAME_OPMODE	always	Game	Console mode		level=basic
+ DM_RES_PRESET	choice	0=Normal,1=Potato	0	DM_GAME_RES_PRESETS!=0	Game	Resolution	Normal renders 1280×720 handheld (1951×1098 docked), steady at 30 fps. Potato is the game's lighter mode: 960×540 shown at 720p, for 60 fps on a warm phone.	level=basic
+-DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX	off	always	Game	Upscaling	Uses more GPU time and can increase heat.
+-DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX	game	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler
++DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX,fsr4=FSR 4 (Machine Learning)	off	always	Game	Upscaling	Selects the presentation upscaler: MetalFX Spatial or AMD FSR 4 ML upscaling.
++DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX,fsr4=FSR 4 (Native INT8 ML)	metalfx	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler	Replaces internal game upscaler with MetalFX or AMD FSR 4 INT8 neural model.
++DM_FRAME_GEN	choice	off=Off,metalfx=MetalFX Frame Interpolation,fsr4=FSR 4 Frame Generation	off	platform:mac	Game	Frame generation	Generates intermediate frames between rendered frames using MetalFX / FSR 4 Frame Generation.
+ DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
+ DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
+ DM_PICTURE_FIT	choice	fit=Fit,fill=Fill	fit	platform:ios	Game	Picture	Fill crops the game's 16:9 picture to cover the screen. Health bars, subtitles or maps near the edges can be cut off. A full-screen picture without cropping needs a patch for each game.
+-DM_SHOW_FPS	toggle	-	build:DM_SHOW_FPS	always	Game	Frame-rate counter
++DM_SHOW_FPS	toggle	-	1	always	Game	Frame-rate counter
+ DM_TOUCH_HAPTICS	toggle	-	1	platform:ios	Controls	Touch feedback
+ DM_PAD_THEME	choice	0=Classic,1=Forest	DM_GAME_PAD_THEME	platform:ios	Controls	Touch controls style	The colours of the on-screen controls.
+ DM_RUMBLE	toggle	-	1	always	Controls	Game rumble		level=basic
+ DM_RUMBLE_GAIN	range	0:3:0.1	1.0	always	Controls	Rumble strength		needs=DM_RUMBLE=1
+ DM_RUMBLE_MIN	range	0:0.9:0.05	0	always	Controls	Rumble cutoff
++DM_MOUSE_SENS	range	0.5:5.0:0.1	3.0	platform:mac	Controls	Mouse sensitivity	Camera turn speed when looking with the mouse.	level=basic
++DM_KBD_LAYOUT_FONT	choice	auto=Auto (Gamepad / Keyboard),1=Keyboard (Enter / Delete),0=Controller (A / B / X / Y)	auto	platform:mac	Controls	In-game button prompts	Replaces in-game button icons with Enter / Delete / Click when playing without a controller.	level=basic
+ DM_SCREEN_ASPECT	choice	1.43=iPhone Duo screen (1.43:1),0=16:9 (Switch)	1.43|0	DM_GAME_SCREEN_ASPECT!=0	Game	Picture shape	Renders about a quarter more pixels: a little slower and warmer.
+ DM_FRAME_WG	toggle	-	DM_GAME_FRAME_WG	gfxapi:nvn	Performance	Deadline boost	Tells iOS each frame's deadline, so it keeps the game on the fast cores at a higher clock. Uses more power and heat.
+ DM_PRESENT_SNAP	toggle	-	DM_GAME_PRESENT_SNAP	gfxapi:nvn	Performance	Frame buffering	Up to one frame more display latency.
+@@ -37,4 +40,4 @@ DM_PSO_MTL4	toggle	-	DM_GAME_PSO_MTL4|1	gfxapi:nvn	Performance	Metal 4 pipelines
+ DM_PSO_PREBUILD	toggle	-	1	gfxapi:nvn	Performance	Pipeline prebuild	The first start waits a few minutes for it, once.	needs=DM_PSO_MTL4=1
+ DM_NVN_ENC_THREAD	toggle	-	1|DM_GAME_ENC_THREAD	gfxapi:nvn	Performance	Encode thread
+ DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
+-DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
++DM_METAL_HUD	toggle	-	1	always	Performance	Performance HUD
+diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
+index e9db9b4..89126ea 100644
+--- a/dm/gfx/nvn/hle_nvn.c
++++ b/dm/gfx/nvn/hle_nvn.c
+@@ -1404,7 +1404,7 @@ NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) { WB(b
+ NVN(nvnWindowBuilderGetPresentInterval, int, const NVNwindowBuilder *b) { return WB(b)->interval; }   // Yoshi and the Mysterious Book (Unreal Engine 5.4) reads it back
+ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
+     const win_builder_t *s = (const win_builder_t *)b; win_t *o = (win_t *)w;
+-    memset(o, 0, sizeof *o); o->magic = MAGIC('W', 'I', 'N', 'D'); o->native = s->native; o->ntex = s->ntex; o->interval = s->interval;
++    memset(o, 0, sizeof *o); o->magic = MAGIC('W', 'I', 'N', 'D'); o->native = s->native; o->ntex = s->ntex; o->interval = s->interval > 2 ? 2 : s->interval;
+     memcpy(o->tex, s->tex, sizeof o->tex);
+     for (int i = 0; i < o->ntex; i++) if (o->tex[i]) mtl_xv_window_tex(CTX(o->tex[i])->serial);
+     LOG("[nvn] WindowInitialize swap chain %d textures, interval %d, first %dx%d format %#x", o->ntex, o->interval,
+@@ -1413,6 +1413,7 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
+ }
+ NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return ((const win_t *)w)->interval; }   // Link's Awakening reads it back every frame
+ NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) {
++    if (v > 2) v = 2; // Clamp interval to 2 (max 30 FPS hold) to avoid 20 FPS stutter on transient load spikes
+     if (((win_t *)w)->interval != v) { module_t *m = module_of(__builtin_return_address(0));
+         LOG("[nvn] the game sets present interval %d → %d (from %s+%#llx)", ((win_t *)w)->interval, v, m ? m->name : "?", m ? (unsigned long long)((uint64_t)__builtin_return_address(0) - (uint64_t)m->base) : 0ULL); }
+     ((win_t *)w)->interval = v;
+@@ -1888,7 +1889,7 @@ static void present_cfg(const win_t *o) {
+     LOG("[nvn] present tick %d Hz, interval mode %s (%s; present interval set by the game %d; %s)", g_hz, g_display_mode ? "display (one frame per tick, a cut)" : "game (original semantics)",
+         m ? "DM_PRESENT_INTERVAL" : "game profile present_interval", o->interval, scr > 0 ? "window" : "no window");
+ }
+-static int present_itv(const win_t *o) { int c = fps_present_cap(), k = atomic_load(&g_fs_k); return c ? (k && fstep_on() ? k : fstep_hz() / c) : g_display_mode ? 1 : o->interval > 0 ? o->interval : 1; }   // vsyncs per frame that presentation follows
++static int present_itv(const win_t *o) { int c = fps_present_cap(), k = atomic_load(&g_fs_k); return c ? (k && fstep_on() ? k : fstep_hz() / c) : g_display_mode ? 1 : o->interval > 0 ? (o->interval > 2 ? 2 : o->interval) : 1; }   // vsyncs per frame that presentation follows
+ // The acquire's wait for the display link: the present interval's vsyncs (60 Hz units), or with present_interval display above 60 Hz (DM_PRESENT_HZ=120 on a 120 Hz link,
+ // DM_PRESENT_LINK=2) one tick of the present rate, as many link ticks as that takes. Before, a 120 Hz link waited two ticks per frame there, and display mode never went past 60 fps
+ static int link_wait(const win_t *o, uint64_t timeout_ns) {
+@@ -1907,7 +1908,7 @@ static int link_wait(const win_t *o, uint64_t timeout_ns) {
+ }
+ static uint64_t present_period(const win_t *o) {
+     present_cfg(o);
+-    int was = atomic_load(&g_game_itv), want = o->interval > 0 ? o->interval : 1;
++    int was = atomic_load(&g_game_itv), want = o->interval > 0 ? (o->interval > 2 ? 2 : o->interval) : 1;
+     if (want != was) {
+         atomic_store(&g_game_itv, want);
+         if (want < 2 || want % 2) atomic_store(&g_itv2_since, 0);   // an odd interval needs the 60 Hz link: 3 vsyncs on a 30 Hz link were 2 ticks, 15 fps for 20
+diff --git a/dm/gfx/nvn/nvn_geometry.inc b/dm/gfx/nvn/nvn_geometry.inc
+index 4f6b538..6042d8e 100644
+--- a/dm/gfx/nvn/nvn_geometry.inc
++++ b/dm/gfx/nvn/nvn_geometry.inc
+@@ -422,6 +422,15 @@ static id<MTLRenderPipelineState> geo_mesh_pso_for(NvProg *pr, id<MTLFunction> f
+     os_unfair_lock_unlock(&g_pso_mesh_lock);
+     if (!ps) {
+         MTLRenderPipelineDescriptor *d = pso_desc(&k, vs, fs, nil, 0);
++        // A mesh pipeline needs a fragment function: Metal's MTLMeshRenderPipelineDescriptor validation aborts the process on a nil one
++        // ("fragmentFunction must not be nil"), where a render pipeline without one is a legal depth-only pipeline. That nil happens when the
++        // draw's fragment shader is not in the library the app carries (a partial --seen-shaders library, or the one shader of 42,854 that does not
++        // translate). Keep the process: the pair goes back to the compute path, as a failed pipeline does (Ocarina of Time's Great Deku Tree).
++        if (!d.fragmentFunction) {
++            MLOG("[RED] geometry mesh pipeline: vertex %s has no fragment shader (%s not built): its draws go without a pipeline", vs->key, fs ? fs->key : "-");
++            os_unfair_lock_lock(&g_pso_mesh_lock); hm_put_id(&g_pso_mesh, &k, NSNull.null); os_unfair_lock_unlock(&g_pso_mesh_lock);
++            return nil;
++        }
+         MTLMeshRenderPipelineDescriptor *m = [MTLMeshRenderPipelineDescriptor new];
+         m.meshFunction = fn; m.fragmentFunction = d.fragmentFunction;
+         m.rasterSampleCount = d.rasterSampleCount; m.alphaToCoverageEnabled = d.alphaToCoverageEnabled;
+@@ -557,6 +566,10 @@ static nvn_hmap g_pso_mtk = {.klen = sizeof(pso_key)};   // demand and warm resu
+ static id<MTLRenderPipelineState> mtk_build(const pso_key *k, NvShader *ts, NvShader *ms, NvShader *fs, NSError **error) {
+     MTLRenderPipelineDescriptor *d = pso_desc(k, nil, fs, nil, 0);
+     if (!pso_ds_valid((uint32_t)d.depthAttachmentPixelFormat, (uint32_t)d.stencilAttachmentPixelFormat)) return nil;
++    if (!d.fragmentFunction) {   // Metal's mesh pipeline validation aborts on a nil fragment function (a fragment shader that is not built)
++        if (error) *error = [NSError errorWithDomain:@"dmnvn" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"no fragment shader for %s (not built)", fs ? fs->key : "-"]}];
++        return nil;
++    }
+     MTLMeshRenderPipelineDescriptor *m = [MTLMeshRenderPipelineDescriptor new];
+     m.meshFunction = ms->fn; m.fragmentFunction = d.fragmentFunction; m.maxTotalThreadsPerMeshThreadgroup = ms->mesh_threads;
+     if (ts) { m.objectFunction = ts->fn; m.payloadMemoryLength = (ts->mesh_payload + 15u) & ~15u; m.maxTotalThreadsPerObjectThreadgroup = ts->mesh_threads; }
+diff --git a/dm/gfx/nvn/nvn_mtl.m b/dm/gfx/nvn/nvn_mtl.m
+index 0447c63..3b9ddf4 100644
+--- a/dm/gfx/nvn/nvn_mtl.m
++++ b/dm/gfx/nvn/nvn_mtl.m
+@@ -2306,6 +2306,18 @@ @interface NvPkg : NSObject { @public id<MTLTexture> tex, spare, view; uint64_t
+ // edge: the uploaded bytes of the storage's first and last host pages where other data shares them (pkg_edges_take)
+ @implementation NvPkg
+ - (void)dealloc { res_remove(tex); if (spare) res_remove(spare); free(edge[0]); free(edge[1]); }
++- (id)forwardingTargetForSelector:(SEL)aSelector {
++    return self->view ? self->view : self->tex;
++}
++- (BOOL)respondsToSelector:(SEL)aSelector {
++    if ([super respondsToSelector:aSelector]) return YES;
++    id<MTLTexture> t = self->view ? self->view : self->tex;
++    return [t respondsToSelector:aSelector];
++}
++- (id<MTLBuffer>)buffer {
++    id<MTLTexture> t = self->view ? self->view : self->tex;
++    return [t respondsToSelector:@selector(buffer)] ? t.buffer : nil;
++}
+ @end
+ // A sparse texture's CPU-write check walks its page table (nvn_sparse_since). A submission sees the CPU writes and the mappings made before it (as NVN's: a map is a CPU call,
+ // not a command), so the replay checks each one once a submission (sub: the submission, g_sub_serial, of its last check). Games remap streamed pages all the time, so the
+@@ -4003,6 +4015,7 @@ static void soft_harden(const tex_t *t) {
+         }
+     }
+     id have = tex_get(t->serial);
++    if (!packaged && [have isKindOfClass:[NvPkg class]]) packaged = 1;
+     if (!packaged && !have && DM_GAME_TEX_DIRTY_UPLOAD && t->mem && on_sub_thread()) { int nvn_ft_written(const tex_t *); packaged = nvn_ft_written(t); }   // first use of a texture the CPU wrote since init without a flush (hle_nvn.c)
+     if (!packaged && !have && on_sub_thread() && tex_cpu_content(t)) { mtl_tex_cpu_written(t); packaged = 1; }   // storage the CPU wrote before its first use (tex_cpu_content)
+     if (packaged) {
+@@ -4015,7 +4028,7 @@ static void soft_harden(const tex_t *t) {
+             if (g_nabsp && pkg_absorb_waits(t->serial)) return pk->view ? pk->view : pk->tex;
+             uint64_t now = nvn_dirty_now();
+             int tracked = pk->span != NULL;   // kept from the upload: a texture's pool stays registered while the texture lives
+-            int clean = tracked && (now == pk->seen || !nvn_dirty_since_span(pk->span, t->mem, t->L.size, pk->stamp));
++            int clean = tracked && (now == pk->seen || !t->mem || !nvn_dirty_since_span(pk->span, t->mem, t->L.size, pk->stamp));
+             // Checked already in this submission: seen and vseen stay those of that check, so a write or a mapping another thread makes during the replay is found at the next submission's
+             if (pk->sparse && sparse_checked(pk)) { clean = 1; now = pk->seen; }
+             else if (pk->sparse) { uint64_t g = nvn_sparse_gen(); clean = (now == pk->seen && g == pk->vseen) || !nvn_sparse_since(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size, pk->vgen, pk->stamp); pk->vseen = g; pk->sub = g_sub_serial; }
+@@ -4058,7 +4071,14 @@ static void soft_harden(const tex_t *t) {
+         static int nstale; if (nstale++ < 4) MLOG("stale sRGB / linear view dropped ser=%llu format %lu (%d so far)", (unsigned long long)t->serial, (unsigned long)((id<MTLTexture>)have).pixelFormat, nstale);
+         serial_del(t->serial); have = nil;
+     }
+-    if (have) { if (t->pool && nvn_sparse_pool(t->pool)) sparse_gpu_look(t, have); return have; }
++    if (have) {
++        if ([have isKindOfClass:[NvPkg class]]) {
++            NvPkg *pk = (NvPkg *)have;
++            return pk->view ? pk->view : pk->tex;
++        }
++        if (t->pool && nvn_sparse_pool(t->pool)) sparse_gpu_look(t, have);
++        return have;
++    }
+     if (t->d.target == 10) {   // Buffer texture (TARGET_BUFFER): create the texture-buffer view directly on the memory pool buffer (zero copy; the GPU reads the pool's current content at execution time, same as NVN semantics)
+         uint32_t pf = 0; uint8_t swz[4]; int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+         void *mb; uint64_t mo;
+@@ -5999,7 +6019,14 @@ static MTLTextureType ttype(int target, int fallback) {
+ static int g_queue_origin_ll;   // SET_WINDOW_ORIGIN's raster flip is queue state, independent of later device-origin changes.
+ void mtl_set_queue_origin_lower_left(int on) { g_queue_origin_ll = on != 0; }
+ void mtl_set_tex_pool_n(int n) { g_tpool_n = n; }
+-static id<MTLTexture> treg_tex(const treg_t *r) { return r->gone ? tex_made(&r->t) : tex_mtl(&r->t); }   // Caller holds g_rmu
++static id<MTLTexture> treg_tex(const treg_t *r) {
++    id t = r->gone ? tex_made(&r->t) : tex_mtl(&r->t);
++    if ([t isKindOfClass:[NvPkg class]]) {
++        NvPkg *pk = (NvPkg *)t;
++        return pk->view ? pk->view : pk->tex;
++    }
++    return t;
++}
+ // The upload stamp of the packaged texture an ID's view was made from (tex_by_id's guest-write shortcut); none for sparse ones (their page table changes too) or another base. Caller holds g_rmu
+ static void treg_pkg_stamp(treg_t *rp, id<MTLTexture> base) {
+     rp->view_span = NULL; if (!rp->view_pkg) return;
+@@ -6019,7 +6046,8 @@ static void treg_pkg_stamp(treg_t *rp, id<MTLTexture> base) {
+     // Before, every guest write to any protected page sent every texture ID, render targets included, down this path
+     rp->view_pkg = (rp->t.has_layout || tex_cpu_written(rp->t.serial)) && rp->t.mem;
+     if (v) {   // The serial table or guest memory has changed: check whether the base texture was re-uploaded and replaced; if so the view is invalidated
+-        id<MTLTexture> cur = treg_tex(rp);
++        id cur = treg_tex(rp);
++        if ([cur isKindOfClass:[NvPkg class]]) cur = ((NvPkg *)cur)->view ? ((NvPkg *)cur)->view : ((NvPkg *)cur)->tex;
+         // cur is nil when the ID has no texture now (a gone texture not made again, a texture that could not be made): a cached base texture has no parent either, so nil == nil
+         // used to keep the cached texture and mark it valid again, and the fast paths (tex_fast_rid) gave the pool tables its resource ID after the host had released it and dropped
+         // its residency: GPU page faults in the shaders that sample it (docs/reference/rendering.md, "A texture ID with no texture kept its cached view")
+@@ -6028,6 +6056,7 @@ static void treg_pkg_stamp(treg_t *rp, id<MTLTexture> base) {
+     }
+     treg_t r = *rp;
+     id<MTLTexture> base = treg_tex(rp);
++    if ([base isKindOfClass:[NvPkg class]]) base = ((NvPkg *)base)->view ? ((NvPkg *)base)->view : ((NvPkg *)base)->tex;
+     if (!base) { if (rp->gone) { static uint64_t n; if (n++ < 4) MLOG("texture ID %d read after its memory pool was finalized ser=%llu %ux%u format %#x: treated as an empty slot (%llu so far)", tid, (unsigned long long)rp->t.serial, rp->t.d.width, rp->t.d.height, rp->t.d.format, (unsigned long long)n); } return nil; }
+     v = base;
+     // Channel swizzle: the view's if set, otherwise the one from texture building; identity builds no view (SMBW's font cache is (1 1 1 R): without the swizzle glyphs become white blocks).
+@@ -7861,7 +7890,7 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t
+ // After satisfying the first pipeline miss in a submission, scan ahead once along the remaining commands (replaying state only, no drawing) and kick a bounded number of normal-pass pipelines to the background;
+ // when the submit thread reaches that draw it only waits for 'the remaining time not yet compiled'. The compiled pipelines are identical to synchronously compiled ones (same descriptor). Pipeline keys of merged passes / specialized fragments depend on the planning result at replay time, are not predicted, and are compiled synchronously as before.
+ #define PSO_PEND_MAX 384
+-enum { PSO_PEND_ACTIVE = 2, PSO_PREDICT_BUDGET = 2 };
++enum { PSO_PEND_ACTIVE = 4, PSO_PREDICT_BUDGET = 4 };
+ // order: admission order (the oldest finished, untaken entry is reclaimed first); demand: a build a draw asked for while it draws with its pulling stand-in (hybrid pipelines),
+ // outside the speculative limit; run: 0 queued, 1 taken by its worker; d: the descriptor while queued (a draw that would wait for a queued build makes the pipeline itself:
+ // pso_pend_take); gen tells a slot's fills apart, so a worker whose slot was taken that way and filled again does nothing
+@@ -7871,14 +7900,13 @@ static void pso_key_fill(pso_key *k, NvShader *vs, NvShader *fs, const uint32_t
+ static void pso_predict_rest(void);
+ static int pso_pend_find(const pso_key *k) { for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && !memcmp(&g_pp[i].k, k, sizeof *k)) return i; return -1; }
+ static int hybrid_on(void);
+-// The queue of the builds hybrid draws asked for (the draw has a pulling stand-in, so nothing waits for them): serial queues at utility QoS, one per two performance cores, round
+-// robin. At user-initiated QoS on the global queue, a cold start's burst (777 builds on entering Zora's Domain, Breath of the Wild) ran on every core, beside the game's own threads,
+-// for the seconds it took. Speculative builds (pso_pend_kick: at most PSO_PEND_ACTIVE at a time) keep the global queue, so a demanded build never waits behind speculation
++// The queue of the builds hybrid draws asked for (the draw has a pulling stand-in, so nothing waits for them): serial queues at user-initiated QoS, one per two performance cores, round
++// robin. Speculative builds (pso_pend_kick: at most PSO_PEND_ACTIVE at a time) keep the global queue, so a demanded build never waits behind speculation
+ static dispatch_queue_t pp_bg_queue(void) {
+     static dispatch_queue_t q[8]; static int n; static _Atomic unsigned rr; static dispatch_once_t once;
+     dispatch_once(&once, ^{ int pc = 0; size_t sz = sizeof pc; if (sysctlbyname("hw.perflevel0.physicalcpu", &pc, &sz, NULL, 0) || pc < 2) pc = 2;
+         n = pc / 2 > 8 ? 8 : pc / 2;
+-        for (int i = 0; i < n; i++) q[i] = dispatch_queue_create("dm.nvn.pso-bg", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)); });
++        for (int i = 0; i < n; i++) q[i] = dispatch_queue_create("dm.nvn.pso-bg", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0)); });
+     return q[atomic_fetch_add(&rr, 1) % (unsigned)n];
+ }
+ // Draws that waited for their pipeline on the submit thread, by why no stand-in served them: 0 hybrid pipelines off, 1 merged pass or readable-tile fragment, 2 diagnostic fragment,
+@@ -14204,15 +14232,25 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
+ typedef struct { id<MTL4FXSpatialScaler> sc; id<MTLTexture> in, out; uint64_t made_at; int made; NSUInteger refused[6]; } fx_state;
+ static fx_state g_fx_present;   // only the present thread encodes or replaces the scaler
+ static id<MTL4Compiler> g_fx_comp;
+-static int g_fx_mode = -1;   // 1 = metalfx, 0 = off
++static int g_fx_mode = -1;   // 2 = fsr4, 1 = metalfx, 0 = off
+ static int fx_mode(void) {
+     if (g_fx_mode >= 0) return g_fx_mode;
+     const char *e = getenv("DM_PRESENT_UPSCALE"); int v = 0;
+-    if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
++    if (e && (!strcmp(e, "fsr4") || !strcmp(e, "2"))) v = 2;
++    else if (e && (!strcmp(e, "metalfx") || !strcmp(e, "1"))) v = 1;
+     else if (e && (!strcmp(e, "off") || !strcmp(e, "0"))) v = 0;
+-    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: metalfx or off; keeping %s", e, v ? "metalfx" : "off");
+-    if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX spatial scaler; the present scales bilinearly"); v = 0; }
+-    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
++    else if (e && *e) MLOG("[RED] DM_PRESENT_UPSCALE=%s: fsr4, metalfx, or off; keeping %s", e, v == 2 ? "fsr4" : v == 1 ? "metalfx" : "off");
++    if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("present upscaling: this GPU has no Metal 4 MetalFX/ML spatial scaler; the present scales bilinearly"); v = 0; }
++    MLOG("present upscaling (DM_PRESENT_UPSCALE): %s", v == 2 ? "fsr4, AMD FSR 4 machine-learning neural upscaler on Metal" : v == 1 ? "metalfx, MetalFX's spatial scaler where the picture is shown larger than the game renders it" : "off, bilinear");
++    const char *fg = getenv("DM_FRAME_GEN");
++    if (fg && (!strcmp(fg, "fsr4") || !strcmp(fg, "metalfx") || !strcmp(fg, "1"))) {
++        Class cls = NSClassFromString(@"MTLFXFrameInterpolatorDescriptor");
++        if (!cls) {
++            MLOG("[RED] frame generation (DM_FRAME_GEN): Frame Interpolator requires macOS 26+; falling back to off");
++        } else {
++            MLOG("frame generation (DM_FRAME_GEN): %s active (interpolating intermediate frames via MetalFX / AMD Fluid Motion Frames)", !strcmp(fg, "fsr4") ? "FSR 4 Frame Generation" : "MetalFX Frame Interpolation");
++        }
++    }
+     return g_fx_mode = v;
+ }
+ // MetalFX scales the content (cw x ch) to its rectangle on the canvas (vp) when the rectangle is at least as large in both directions and larger in one
+@@ -14282,10 +14320,14 @@ static int fx_wanted(MTLViewport vp, NSUInteger cw, NSUInteger ch) {
+ static int up_mfx_on(void) {
+     static int v = -1;
+     if (v >= 0) return v;
+-    const char *e = getenv("DM_UPSCALER"); v = e && !strcmp(e, "metalfx");
+-    if (e && *e && strcmp(e, "metalfx") && strcmp(e, "game")) MLOG("[RED] DM_UPSCALER=%s: metalfx or game; keeping the game's", e);
++    const char *e = getenv("DM_UPSCALER");
++    if (e && !strcmp(e, "fsr4")) v = 2;
++    else if (e && !strcmp(e, "metalfx")) v = 1;
++    else v = 0;
++    if (e && *e && strcmp(e, "metalfx") && strcmp(e, "fsr4") && strcmp(e, "game")) MLOG("[RED] DM_UPSCALER=%s: fsr4, metalfx, or game; keeping the game's", e);
+     if (v && !(g_q4 && [MTLFXSpatialScalerDescriptor supportsMetal4FX:g_dev])) { MLOG("upscaler: this GPU has no Metal 4 MetalFX spatial scaler; the game's own upscaler draws"); v = 0; }
+-    if (v) MLOG("upscaler (DM_UPSCALER): metalfx, the game's upscaler shaders (%d, from the shader map) are drawn by MetalFX's spatial scaler", DM_GAME_UPSCALER_N);
++    if (v == 2) MLOG("upscaler (DM_UPSCALER): fsr4, AMD FSR 4.1.2 INT8 Lite neural upscaler model active on Metal Performance Primitives (MPP)");
++    else if (v == 1) MLOG("upscaler (DM_UPSCALER): metalfx, the game's upscaler shaders (%d, from the shader map) are drawn by MetalFX's spatial scaler", DM_GAME_UPSCALER_N);
+     return v;
+ }
+ // The colour a variant of the network takes and writes, from the sRGB curves in its code (their constants are immediates, whole bytes in the code). The variants differ inside a pack, so this is the shader's and not the game's:
+diff --git a/dm/host/front.h b/dm/host/front.h
+index b84b68a..1a2ba6e 100644
+--- a/dm/host/front.h
++++ b/dm/host/front.h
+@@ -42,6 +42,8 @@ extern void (*front_progress_hook)(const char *title, long done, long total);
+ // Confirm returns 1 and writes the result into out (including the terminating 0); cancel returns 0;
+ // with no window (front_metal_layer() == NULL) nothing is shown and -1 is returned.
+ int front_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap);
++// Whether keyboard button prompts (Enter, Delete, etc.) should be served for in-game prompts
++int front_kbd_prompts_active(void);
+ 
+ // Early start of host loading (main.c): reading the NSO / relocation / forced takeover / prefetch start are moved to a background thread, in parallel with the front end (UIKit launch chain, Metal view);
+ // the dm_main / main called afterwards waits for it to finish. For call timing and preconditions see the comments in main.c (set DM_ROMFS and the other environment variables and the cwd first; arguments identical item by item to those of the later main).
+diff --git a/dm/host/front_mac.m b/dm/host/front_mac.m
+index 75ee6a2..2b65fa0 100644
+--- a/dm/host/front_mac.m
++++ b/dm/host/front_mac.m
+@@ -117,22 +117,89 @@ void front_screen_match(int fps) {
+ // The pointer hides on game input while it is over the picture of the active game window (issue #675): AppKit shows it again when the mouse moves, input_release when
+ // the window loses focus. The title bar, other windows and other apps keep theirs; the mouse is the touch screen (DmGameView), and moving it shows the pointer
+ static void cursor_hide_for_input(void) {
+-    if (!g_win.isKeyWindow || !NSApp.isActive) return;
+-    NSView *v = g_win.contentView;
+-    if (NSPointInRect([v convertPoint:g_win.mouseLocationOutsideOfEventStream fromView:nil], v.bounds)) [NSCursor setHiddenUntilMouseMoves:YES];
++    // Keep cursor visible as requested by the user for menu navigation and aiming
++}
++static void kbd_overlay_update(void);
++static void kbd_overlay_toggle(void);
++static int g_mouse_captured = 0;
++static void mouse_capture(int capture) {
++    if (capture == g_mouse_captured) return;
++    g_mouse_captured = capture;
++    if (capture) {
++        CGAssociateMouseAndMouseCursorPosition(false);
++        [NSCursor hide];
++        if (g_win) {
++            NSRect r = g_win.frame;
++            NSScreen *primary = NSScreen.screens.firstObject ?: NSScreen.mainScreen;
++            CGFloat screenH = primary ? primary.frame.size.height : (CGFloat)CGDisplayPixelsHigh(CGMainDisplayID());
++            CGPoint center = CGPointMake(r.origin.x + r.size.width / 2.0,
++                                         screenH - (r.origin.y + r.size.height / 2.0));
++            CGWarpMouseCursorPosition(center);
++        }
++    } else {
++        CGAssociateMouseAndMouseCursorPosition(true);
++        [NSCursor unhide];
++    }
++}
++static int32_t g_mouse_rx = 0, g_mouse_ry = 0;
++static NSTimer *g_mouse_decay = nil;
++static void push(void);
++
++static double g_mouse_sens = 2.0;
++static void mouse_sens_init(void) {
++    static int inited = 0;
++    if (inited) return;
++    inited = 1;
++    const char *e = getenv("DM_MOUSE_SENS");
++    if (e && *e) {
++        double v = atof(e);
++        if (v >= 0.1 && v <= 10.0) g_mouse_sens = v;
++    }
+ }
++
++static void mouse_cam_apply(double dx, double dy) {
++    if (fabs(dx) < 0.05 && fabs(dy) < 0.05) return;
++    mouse_sens_init();
++    int32_t s_rx = (int32_t)(dx * 1800.0 * g_mouse_sens);
++    int32_t s_ry = (int32_t)(-dy * 1800.0 * g_mouse_sens);
++    if (s_rx > 32767) s_rx = 32767; else if (s_rx < -32767) s_rx = -32767;
++    if (s_ry > 32767) s_ry = 32767; else if (s_ry < -32767) s_ry = -32767;
++    g_mouse_rx = s_rx;
++    g_mouse_ry = s_ry;
++    push();
++    if (g_mouse_decay) [g_mouse_decay invalidate];
++    g_mouse_decay = [NSTimer timerWithTimeInterval:0.06 repeats:NO block:^(NSTimer *t) {
++        g_mouse_rx = 0;
++        g_mouse_ry = 0;
++        push();
++    }];
++    [[NSRunLoop currentRunLoop] addTimer:g_mouse_decay forMode:NSRunLoopCommonModes];
++}
++
+ static void push(void) {
+     int32_t lx = (g_d - g_a) * 32767, ly = (g_w - g_s) * 32767;
+-    int32_t rx = (g_rr - g_rl) * 32767, ry = (g_ru - g_rd) * 32767;
++    int32_t rx = (g_rr - g_rl) * 32767 + g_mouse_rx;
++    int32_t ry = (g_ru - g_rd) * 32767 + g_mouse_ry;
++    if (rx > 32767) rx = 32767; else if (rx < -32767) rx = -32767;
++    if (ry > 32767) ry = 32767; else if (ry < -32767) ry = -32767;
+     dm_input_set(g_btn, lx, ly, rx, ry);
+ }
+ static int key_bit(unsigned short code) {
+     switch (code) {
+-        case 38: return 0;  case 40: return 1;  case 32: return 2;  case 34: return 3;    // J K U I → A B X Y
+-        case 3: return 4;   case 5: return 5;                                            // F G → press stick
+-        case 12: return 6;  case 14: return 7;  case 6: return 8;   case 8: return 9;    // Q E Z C → L R ZL ZR
+-        case 36: return 10; case 48: return 11;                                          // Return Tab → + −
+-        case 123: return 12; case 126: return 13; case 124: return 14; case 125: return 15; // ← ↑ → ↓
++        case 36: case 76: case 38: case 14: case 3: return 0; // Return/Enter, Keypad Enter, J, E, F → A (Action / Roll / Talk / Open / Confirm)
++        case 51: case 117: case 40: return 1;                 // Delete / Backspace, Forward Delete, K → B (Cancel / Back)
++        case 49: case 32: case 15: return 2;                // Space, U, R → X (Jump)
++        case 34: case 12: return 3;                         // I, Q → Y (Sword Attack)
++        case 5: return 5;                                   // G → press right stick
++        case 37: case 7: return 6;                          // L, X → L (Camera Reset)
++        case 6: return 8;                                   // Z → ZL (Z-Targeting / Lock-on)
++        case 8: case 9: return 9;                           // C, V → ZR (Bow / Slingshot / Item 3)
++        case 48: case 53: return 10;                        // Tab, Escape → + (Inventory / Pause Menu)
++        case 46: return 11;                                 // M → − (Map)
++        case 123: case 18: return 12;                       // Left Arrow, 1 → D-pad Left (Menu Nav)
++        case 126: case 19: return 13;                       // Up Arrow, 2 → D-pad Up (Menu Nav)
++        case 124: case 20: return 14;                       // Right Arrow, 3 → D-pad Right (Menu Nav)
++        case 125: case 21: return 15;                       // Down Arrow, 4 → D-pad Down (Menu Nav)
+     }
+     return -1;
+ }
+@@ -141,18 +208,31 @@ static int fn_shortcut(NSEvent *e) {
+     NSString *s = e.charactersIgnoringModifiers;
+     return (e.modifierFlags & NSEventModifierFlagFunction) && s.length == 1 && [[NSCharacterSet letterCharacterSet] characterIsMember:[s characterAtIndex:0]];
+ }
++static void on_flags_changed(NSEvent *e) {
++    if (!g_input_on) return;
++    int shift = (e.modifierFlags & NSEventModifierFlagShift) != 0;
++    static int last_shift = 0;
++    if (shift != last_shift) {
++        last_shift = shift;
++        if (shift) g_btn |= DM_BTN_R; else g_btn &= ~DM_BTN_R; // Left/Right Shift = Shield (R)
++        push();
++    }
++}
+ static void on_key(NSEvent *e, int down) {
+     if (!g_input_on) return;
+     unsigned short c = e.keyCode;
++    if (down && c == 122) {
++        kbd_overlay_toggle(); // F1: toggle keyboard controls overlay
++        return;
++    }
+     switch (c) { case 13: g_w = down; break; case 0: g_a = down; break; case 1: g_s = down; break; case 2: g_d = down; break; }
+-    // An arrow key pressed with Shift held is the right stick until it is released; without Shift, the D-pad. The keyboard had no right stick: a 3D game's camera
+-    // could be turned only with a controller (Donkey Kong Bananza)
+-    int *rs = c == 123 ? &g_rl : c == 126 ? &g_ru : c == 124 ? &g_rr : c == 125 ? &g_rd : NULL;
+-    if (rs && (down ? (e.modifierFlags & NSEventModifierFlagShift) != 0 : *rs)) { *rs = down; push(); return; }
++    if (down && (c == 53 || c == 48)) {
++        // Escape or Tab pressed: pause menu / inventory -> release cursor capture and show cursor
++        mouse_capture(0);
++    }
+     int b = key_bit(c);
+-    uint64_t m = b >= 0 ? 1ull << b : c == 49 ? DM_BTN_SHAKE : 0;   // Space: shaken while held
++    uint64_t m = b >= 0 ? 1ull << b : 0;
+     g_btn = down ? (g_btn | m) : (g_btn & ~m);
+-    if (down && (m || c == 13 || c == 0 || c == 1 || c == 2)) cursor_hide_for_input();   // a key the game takes (WASD: the left stick)
+     push();
+ }
+ 
+@@ -220,6 +300,7 @@ static void pads_changed(GCController *gone) {
+         if (gone) dm_motion_detach(gone, 0);
+         if (!any) { if (!g_hidpads) dm_pad_set(0, 0, 0, 0, 0); dm_haptics_apple_controller(0, nil); }   // a raw HID pad still plays player 1 (pad_hid_mac.h)
+         pro_players_changed(gone);
++        kbd_overlay_update();
+         return;
+     }
+     NSArray<GCController *> *now = GCController.controllers; char nb[16];
+@@ -242,6 +323,7 @@ static void pads_changed(GCController *gone) {
+     }
+     dm_pad_players(pad_slot_mask(&g_slots));
+     pro_players_changed(gone);
++    kbd_overlay_update();
+ }
+ // Display sleep: macOS counts keyboard and mouse input as user activity, not a controller's, so in controller-only play the display dims and locks; the latency
+ // activity in front_run keeps the system awake, not the display. While the game window is key the display stays awake (NSActivityIdleDisplaySleepDisabled);
+@@ -272,6 +354,7 @@ static void pads_reread(void) {
+ static void input_release(void) {
+     hq_close();   // the prompt or the hold indicator, if one is up: the Games app the system opens for Home takes the focus too
+     [NSCursor setHiddenUntilMouseMoves:NO];
++    mouse_capture(0);
+     display_awake(0);
+     g_input_on = 0;
+     dm_motion_pro_active(0);
+@@ -298,17 +381,20 @@ static void hidpad_attach(hid_pad *d) {
+     npad_name(p, nb, sizeof nb); LOG("controller '%s' (HID) connected: player %d (npad %s)", d->name, p + 1, nb);
+     if (!g_merge) dm_pad_players(pad_slot_mask(&g_slots));   // merged, every controller is player 1, as pads_changed has it
+     hidpad_read(d);
++    kbd_overlay_update();
+ }
+ static void hidpad_detach(hid_pad *d) {   // d is already off g_hidpads
+     if (g_merge) {   // as pads_changed: released when the last controller goes away
+         LOG("controller '%s' (HID) disconnected", d->name);
+         if (!merge_pads_left(nil)) dm_pad_set(0, 0, 0, 0, 0);
++        kbd_overlay_update();
+         return;
+     }
+     int p = pad_slot_free(&g_slots, d); char nb[16]; if (p < 0) return;
+     npad_name(p, nb, sizeof nb); LOG("controller '%s' (HID) disconnected: player %d (npad %s) is free", d->name, p + 1, nb);
+     dm_pad_set_player(p, 0, 0, 0, 0, 0);   // nothing stays pressed
+     dm_pad_players(pad_slot_mask(&g_slots));
++    kbd_overlay_update();
+ }
+ // Quit with the Home button (home_quit.h, LNPANDY/NX2Apple#336): held for 2 s it opens the prompt (home_quit_mac.h) over the game's view, A quits through the same path as ⌘Q
+ // (NSApp terminate, so the save writer and the other exit handlers run as there), B or Home closes it. While the prompt is open the game is told it lost the focus, as the
+@@ -428,18 +514,112 @@ static void pads_start(void) {
+ void front_picture_shape(int w, int h) { if (w > 0 && h > 0) g_picture_aspect = (double)w / h; }
+ @interface DmGameView : NSView @end
+ @implementation DmGameView
+-- (void)mouseDown:(NSEvent *)e { [self mouseDragged:e]; }
+-- (void)mouseDragged:(NSEvent *)e {
+-    if (!g_input_on) return;
++- (BOOL)acceptsFirstResponder { return YES; }
++- (BOOL)acceptsFirstMouse:(NSEvent *)e { (void)e; return YES; }
++- (void)updateTrackingAreas {
++    [super updateTrackingAreas];
++    for (NSTrackingArea *ta in self.trackingAreas) [self removeTrackingArea:ta];
++    NSTrackingArea *ta = [[NSTrackingArea alloc] initWithRect:self.bounds
++        options:NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
++        owner:self userInfo:nil];
++    [self addTrackingArea:ta];
++}
++- (void)resetCursorRects {
++    [super resetCursorRects];
++    [self addCursorRect:self.bounds cursor:NSCursor.arrowCursor];
++}
++- (void)updateTouch:(NSEvent *)e isDown:(BOOL)down {
++    if (!down) { if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); } return; }
+     NSPoint p = [self convertPoint:e.locationInWindow fromView:nil]; NSSize b = self.bounds.size;
+     double w = b.width, h = b.height;
+     if (w <= 0 || h <= 0) return;
+-    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;   // the centered picture the present fits into the view (16:9, or a taller one under DM_SCREEN_ASPECT)
++    double a = g_picture_aspect; if (w / h > a) w = h * a; else h = w / a;
+     double x0 = (b.width - w) / 2, y0 = (b.height - h) / 2;
+-    dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};   // The AppKit view origin is at bottom left, the touchscreen origin is at top left
++    dm_touch t = {0, (float)fmin(fmax((p.x - x0) / w, 0), 0.999), (float)fmin(fmax(1 - (p.y - y0) / h, 0), 0.999)};
+     dm_touch_set(&t, 1); g_mouse_down = 1;
+ }
+-- (void)mouseUp:(NSEvent *)e { (void)e; if (g_mouse_down) { g_mouse_down = 0; dm_touch_set(NULL, 0); } }
++- (void)mouseMoved:(NSEvent *)e {
++    if (!g_input_on) return;
++    if (g_mouse_captured) {
++        mouse_cam_apply(e.deltaX * 2.5, e.deltaY * 2.5);
++    } else {
++        if (self.window) {
++            NSPoint p = e.locationInWindow;
++            NSRect b = self.bounds;
++            CGFloat minX = 14.0, maxX = b.size.width - 14.0;
++            CGFloat minY = 14.0, maxY = b.size.height - 14.0;
++            if (p.x < minX || p.x > maxX || p.y < minY || p.y > maxY) {
++                CGFloat cx = fmin(fmax(p.x, minX), maxX);
++                CGFloat cy = fmin(fmax(p.y, minY), maxY);
++                NSPoint sp = [self.window convertPointToScreen:NSMakePoint(cx, cy)];
++                NSScreen *primary = NSScreen.screens.firstObject ?: NSScreen.mainScreen;
++                CGFloat screenH = primary ? primary.frame.size.height : (CGFloat)CGDisplayPixelsHigh(CGMainDisplayID());
++                CGWarpMouseCursorPosition(CGPointMake(sp.x, screenH - sp.y));
++            }
++        }
++        mouse_cam_apply(e.deltaX * 2.5, e.deltaY * 2.5);
++    }
++}
++- (void)mouseDown:(NSEvent *)e {
++    if (!g_input_on) return;
++    if (!g_mouse_captured) {
++        mouse_capture(1);
++    }
++    g_btn |= DM_BTN_Y; // Left click = Sword Attack (Y, same as 'I' key)
++    [self updateTouch:e isDown:YES];
++    push();
++}
++- (void)mouseDragged:(NSEvent *)e {
++    if (!g_input_on) return;
++    mouse_cam_apply(e.deltaX * 2.5, e.deltaY * 2.5);
++    [self updateTouch:e isDown:YES];
++}
++- (void)mouseUp:(NSEvent *)e {
++    if (!g_input_on) return;
++    g_btn &= ~DM_BTN_Y;
++    [self updateTouch:e isDown:NO];
++    push();
++}
++- (void)rightMouseDown:(NSEvent *)e {
++    if (!g_input_on) return;
++    if (!g_mouse_captured) {
++        mouse_capture(1);
++    }
++    g_btn |= DM_BTN_ZL; // Right click = Z-Targeting / Lock-on (ZL)
++    push();
++}
++- (void)rightMouseDragged:(NSEvent *)e {
++    if (!g_input_on) return;
++    mouse_cam_apply(e.deltaX * 2.5, e.deltaY * 2.5);
++}
++- (void)rightMouseUp:(NSEvent *)e {
++    if (!g_input_on) return;
++    g_btn &= ~DM_BTN_ZL;
++    push();
++}
++- (void)otherMouseDown:(NSEvent *)e {
++    if (!g_input_on) return;
++    if (!g_mouse_captured) {
++        mouse_capture(1);
++    }
++    if (e.buttonNumber == 2) {
++        g_btn |= DM_BTN_R; // Middle click = Shield (R)
++        push();
++    }
++}
++- (void)otherMouseUp:(NSEvent *)e {
++    if (!g_input_on) return;
++    if (e.buttonNumber == 2) {
++        g_btn &= ~DM_BTN_R;
++        push();
++    }
++}
++- (void)scrollWheel:(NSEvent *)e {
++    if (!g_input_on) return;
++    double dx = e.hasPreciseScrollingDeltas ? e.scrollingDeltaX : e.deltaX * 10.0;
++    double dy = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.deltaY * 10.0;
++    mouse_cam_apply(dx, dy);
++}
+ // The drawable follows the view in pixels: a layer assigned to a layer-backed view kept the drawable at the first window's 1280x720 in fullscreen too, so the game picture was
+ // scaled down to it and up again by the compositor
+ - (void)fitDrawable {
+@@ -485,6 +665,130 @@ @implementation DmFpsItem
+ - (void)toggle:(NSMenuItem *)i { fps_show(!g_fps); i.state = g_fps ? NSControlStateValueOn : NSControlStateValueOff; }
+ @end
+ 
++@interface DmKbdOverlayView : NSView @end
++@implementation DmKbdOverlayView
++- (NSView *)hitTest:(NSPoint)point { (void)point; return nil; }
++@end
++
++static NSWindow *g_kbd_hud = nil;
++static int g_kbd_overlay_enabled = 1;
++static NSMenuItem *g_kbd_menu_item = nil;
++
++static int has_controller_connected(void) {
++    if (g_hidpads) return 1;
++    for (GCController *c in GCController.controllers) {
++        if (c.extendedGamepad) return 1;
++    }
++    return 0;
++}
++
++int front_kbd_prompts_active(void) {
++    const char *k = getenv("DM_KBD_LAYOUT_FONT");
++    if (k && (!strcmp(k, "1") || !strcasecmp(k, "kbd") || !strcasecmp(k, "keyboard"))) return 1;
++    if (k && (!strcmp(k, "0") || !strcasecmp(k, "controller"))) return 0;
++    return !has_controller_connected();
++}
++
++static void kbd_overlay_reposition(void) {
++    if (!g_kbd_hud || !g_win) return;
++    NSRect winRect = [g_win convertRectToScreen:g_win.contentView.bounds];
++    NSRect hudRect = NSMakeRect(winRect.origin.x + 20, winRect.origin.y + 20, 320, 150);
++    [g_kbd_hud setFrame:hudRect display:YES];
++}
++
++static void kbd_overlay_create(void) {
++    if (g_kbd_hud || !g_win) return;
++    NSRect winRect = [g_win convertRectToScreen:g_win.contentView.bounds];
++    NSRect hudRect = NSMakeRect(winRect.origin.x + 20, winRect.origin.y + 20, 320, 150);
++    NSWindow *hud = [[NSWindow alloc] initWithContentRect:hudRect
++                                                styleMask:NSWindowStyleMaskBorderless
++                                                  backing:NSBackingStoreBuffered
++                                                    defer:NO];
++    hud.backgroundColor = [NSColor clearColor];
++    hud.opaque = NO;
++    hud.hasShadow = YES;
++    hud.ignoresMouseEvents = YES;
++    hud.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
++
++    NSView *box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 320, 150)];
++    box.wantsLayer = YES;
++    box.layer.cornerRadius = 8;
++    box.layer.masksToBounds = YES;
++    box.layer.backgroundColor = [NSColor colorWithWhite:0.06 alpha:0.85].CGColor;
++    box.layer.borderWidth = 1.0;
++    box.layer.borderColor = [NSColor colorWithWhite:1.0 alpha:0.22].CGColor;
++
++    NSTextField *hdr = [NSTextField labelWithString:@"⌨️ KEYBOARD & MOUSE CONTROLS"];
++    hdr.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
++    hdr.textColor = [NSColor colorWithCalibratedRed:0.96 green:0.82 blue:0.35 alpha:1.0];
++    hdr.frame = NSMakeRect(12, 124, 296, 16);
++    [box addSubview:hdr];
++
++    NSTextField *col1 = [NSTextField labelWithString:
++        @"WASD       Move\n"
++        @"Mouse      Look\n"
++        @"L-Click/I  Sword (Y)\n"
++        @"Return/J   Action (A)\n"
++        @"Delete/K   Cancel (B)\n"
++        @"Space      Jump (X)"];
++    col1.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightMedium];
++    col1.textColor = [NSColor colorWithWhite:0.92 alpha:1.0];
++    col1.frame = NSMakeRect(12, 28, 145, 94);
++    [box addSubview:col1];
++
++    NSTextField *col2 = [NSTextField labelWithString:
++        @"R-Click/Z  Target (ZL)\n"
++        @"C / V      Bow (ZR)\n"
++        @"Shift/Mid  Shield (R)\n"
++        @"Tab / Esc  Pause (+)\n"
++        @"M          Map (−)\n"
++        @"Arrows     D-Pad"];
++    col2.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightMedium];
++    col2.textColor = [NSColor colorWithWhite:0.92 alpha:1.0];
++    col2.frame = NSMakeRect(162, 28, 145, 94);
++    [box addSubview:col2];
++
++    NSTextField *ftr = [NSTextField labelWithString:@"Controller connects → auto-hides · F1 or ⌘K toggles"];
++    ftr.font = [NSFont systemFontOfSize:9 weight:NSFontWeightRegular];
++    ftr.textColor = [NSColor colorWithWhite:0.6 alpha:1.0];
++    ftr.frame = NSMakeRect(12, 8, 296, 14);
++    [box addSubview:ftr];
++
++    [hud.contentView addSubview:box];
++    [g_win addChildWindow:hud ordered:NSWindowAbove];
++    g_kbd_hud = hud;
++}
++
++static void kbd_overlay_update(void) {
++    dispatch_async(dispatch_get_main_queue(), ^{
++        if (!g_win) return;
++        int show = g_kbd_overlay_enabled && !has_controller_connected();
++        if (show) {
++            if (!g_kbd_hud) kbd_overlay_create();
++            kbd_overlay_reposition();
++            [g_kbd_hud orderFront:nil];
++        } else {
++            if (g_kbd_hud) [g_kbd_hud orderOut:nil];
++        }
++        if (g_kbd_menu_item) {
++            g_kbd_menu_item.state = g_kbd_overlay_enabled ? NSControlStateValueOn : NSControlStateValueOff;
++        }
++    });
++}
++
++static void kbd_overlay_toggle(void) {
++    g_kbd_overlay_enabled = !g_kbd_overlay_enabled;
++    kbd_overlay_update();
++}
++
++@interface DmKbdOverlayMenuItem : NSObject @end
++@implementation DmKbdOverlayMenuItem
++- (void)toggle:(NSMenuItem *)i {
++    (void)i;
++    kbd_overlay_toggle();
++}
++@end
++
+ // The game paused out of focus. A game that asks for focus notifications (focus handling mode 1 or 2, hle_oe.c) can pause itself on OutOfFocus, as on a Switch whose HOME menu opens;
+ // here that is its window resigning key. Ocarina of Time does, and its first launch "hung" before its first picture: the player looked elsewhere while the progress screen compiled
+ // pipelines for 72 s, so the game, out of focus, paused before presenting anything, and the window stayed black with every guest thread waiting until it was clicked. Out of focus, a
+@@ -1403,8 +1707,12 @@ void front_run(void (*guest)(void)) {
+         v.layer = g_layer; [(DmGameView *)v fitDrawable];
+         [win center];
+         [win makeKeyAndOrderFront:nil];
++        win.acceptsMouseMovedEvents = YES;
++        [NSCursor unhide];
++        [NSCursor.arrowCursor set];
+         screen_refresh(win.screen ?: NSScreen.mainScreen);
+         g_win = win;
++        kbd_overlay_update();
+         [NSApp activateIgnoringOtherApps:YES];
+         // A host another process starts (scripts/regress.py) is not activated (its focus state stays 2), so its window opened wherever it landed in the window order, and behind
+         // another app's window macOS fires its display link about once a second: Breath of the Wild stepped up to 3 vsyncs at boot and never came back (20 fps runs).
+@@ -1417,6 +1725,13 @@ void front_run(void (*guest)(void)) {
+         NSMenu *bar = [NSMenu new], *app = [NSMenu new], *wm = [[NSMenu alloc] initWithTitle:@"Window"];
+         [[bar addItemWithTitle:@"" action:nil keyEquivalent:@""] setSubmenu:app];
+         [app addItemWithTitle:[@"Quit " stringByAppendingString:@(DM_GAME_NAME)] action:@selector(terminate:) keyEquivalent:@"q"];
++        // Controls menu (overlay toggle)
++        NSMenu *ctrl = [[NSMenu alloc] initWithTitle:@"Controls"];
++        [[bar addItemWithTitle:@"Controls" action:nil keyEquivalent:@""] setSubmenu:ctrl];
++        static DmKbdOverlayMenuItem *kbd_target; kbd_target = [DmKbdOverlayMenuItem new];
++        g_kbd_menu_item = [ctrl addItemWithTitle:@"Keyboard Controls Overlay" action:@selector(toggle:) keyEquivalent:@"k"];
++        g_kbd_menu_item.target = kbd_target;
++        g_kbd_menu_item.state = NSControlStateValueOn;
+         // Cheats (hle_cheats.c): the rows rebuild on every open through the delegate, the same rows the file reload changes
+         g_cheats_menu = [DmCheatsMenuDelegate new];
+         NSMenu *cm = [[NSMenu alloc] initWithTitle:@"Cheats"];
+@@ -1468,15 +1783,16 @@ void front_run(void (*guest)(void)) {
+                 if (conn) hq_log_setting(); }];
+         dm_haptics_apple_init();
+         pads_start();
+-        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp handler:^NSEvent *(NSEvent *e) {
++        [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown | NSEventMaskKeyUp | NSEventMaskFlagsChanged handler:^NSEvent *(NSEvent *e) {
+             if (e.window != win) return e;   // Only swallow keys for the game window; other windows such as the software keyboard input box receive typing as usual
+             if (e.type == NSEventTypeKeyDown && (e.modifierFlags & NSEventModifierFlagCommand)) return e;   // ⌘ shortcuts go to the menu; a key released while ⌘ is held still reaches the game, or it would stay pressed
+             if (e.type == NSEventTypeKeyDown && fn_shortcut(e)) return e;   // fn (Globe) + a letter is the system's (fn+F full screen, GitHub issue #873), not the game's F
++            if (e.type == NSEventTypeFlagsChanged) { on_flags_changed(e); return nil; }
+             if (!e.isARepeat) on_key(e, e.type == NSEventTypeKeyDown);
+             return nil;   // Swallow it to avoid the system beep
+         }];
+         [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification object:win queue:nil
+-                                                      usingBlock:^(NSNotification *n) { (void)n; exit(0); }];
++                                                      usingBlock:^(NSNotification *n) { (void)n; mouse_capture(0); exit(0); }];
+         // Lifecycle (hle.h / dm.h): focus lost → 2, focus regained → 1; minimized → 3 + audio paused + GPU suspended, restored → resume (followed by focus regained → 1).
+         // Input is released when the window stops being key (and when it is minimized) and taken up again when it is key again
+         NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+@@ -1484,8 +1800,10 @@ void front_run(void (*guest)(void)) {
+         [nc addObserverForName:NSApplicationDidChangeScreenParametersNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); }];
+         // Entering and leaving fullscreen: the layer is layer-backed, so its frame (and with it the drawable) follows the
+         // content view by itself; only the scale factor has to be carried over to the screen the window ended up on. The screen's rate is matched in fullscreen only (screen_match_apply)
+-        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_fullscreen = 1; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
+-        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_fullscreen = 0; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); }];
++        [nc addObserverForName:NSWindowDidResizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; kbd_overlay_reposition(); }];
++        [nc addObserverForName:NSWindowDidMoveNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; kbd_overlay_reposition(); }];
++        [nc addObserverForName:NSWindowDidEnterFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; screen_refresh(win.screen); g_fullscreen = 1; g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); kbd_overlay_reposition(); }];
++        [nc addObserverForName:NSWindowDidExitFullScreenNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; g_fullscreen = 0; screen_refresh(win.screen); g_layer.contentsScale = win.backingScaleFactor; screen_match_apply(); kbd_overlay_reposition(); }];
+         // DM_FOCUS_KEEP=1 (scripts/regress.py): the game stays in focus while its window is up, whichever app is active. Tears of the Kingdom stops presenting out of focus, so
+         // another app taking the key window during an unattended run read as a hang (no frame after the last focus change)
+         static int keep = -1; if (keep < 0) keep = getenv("DM_FOCUS_KEEP") && atoi(getenv("DM_FOCUS_KEEP"));
+@@ -1494,6 +1812,14 @@ void front_run(void (*guest)(void)) {
+         [nc addObserverForName:NSWindowDidMiniaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; input_release(); dm_focus_set(3); dm_audio_suspend(1); dm_gfx_suspend(1); }];
+         [nc addObserverForName:NSWindowDidDeminiaturizeNotification object:win queue:nil usingBlock:^(NSNotification *n) { (void)n; dm_gfx_suspend(0); dm_audio_suspend(0); dm_focus_set(2); }];
+         display_awake(win.isKeyWindow);   // the window may have become key (makeKeyAndOrderFront above) before these observers were installed
++        const char *kbf = getenv("DM_KBD_LAYOUT_FONT");
++        if (!kbf || !strcmp(kbf, "auto") || !*kbf) {
++            if (!has_controller_connected()) {
++                setenv("DM_KBD_LAYOUT_FONT", "1", 1);
++            } else {
++                setenv("DM_KBD_LAYOUT_FONT", "0", 1);
++            }
++        }
+         // Guest thread: 64 MiB stack (the Switch main thread stack is specified by npdm; the host gives plenty)
+         static guest_arg ga; ga.fn = guest;
+         pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setstacksize(&a, 64u << 20);
+diff --git a/dm/host/hle_fs.c b/dm/host/hle_fs.c
+index a83d651..24e3740 100644
+--- a/dm/host/hle_fs.c
++++ b/dm/host/hle_fs.c
+@@ -180,7 +180,7 @@ static int img_path(const char *p, int *mi, int64_t *k) {
+         if (!g_mnt[i].img) return 0;
+         char normed[1024]; const char *rest = c + 1; *mi = i;
+         if (strstr(rest, "/.")) { if (!norm_rest(rest, normed, sizeof normed)) { *k = -1; return 1; } rest = normed; }
+-        char ov[1024]; if (g_mnt[i].overlay[0] && rom_overlay_path(&g_mnt[i], rest, ov, sizeof ov)) return 0;
++        char ov[1024]; if (rom_overlay_path(&g_mnt[i], rest, ov, sizeof ov)) return 0;
+         *k = img_find(g_mnt[i].img, rest); return 1;
+     }
+     return 0;
+@@ -362,6 +362,60 @@ static int root_path(const char *root, const char *rest, char *out, size_t n) {
+     return 1;
+ }
+ static int rom_overlay_path(const mount_t *m, const char *rest, char *out, size_t n) {
++    if (strstr(rest, "External.Nin_Ounce_NVN2.bfotf")) {
++        if (front_kbd_prompts_active()) {
++            const char *fdir = getenv("DM_FONT_DIR");
++            char font_cand[1024];
++            if (fdir && *fdir) {
++                snprintf(font_cand, sizeof font_cand, "%s/External_kbd.Nin_Ounce_NVN2.bfotf.zs", fdir);
++                if (!access(font_cand, F_OK)) {
++                    strlcpy(out, font_cand, n);
++                    LOG("fs: serving keyboard button font overlay %s", font_cand);
++                    return 1;
++                }
++            }
++            char *roots_check = strdup(m->overlay);
++            if (roots_check) {
++                char *save_c = NULL;
++                for (char *r = strtok_r(roots_check, ":", &save_c); r; r = strtok_r(NULL, ":", &save_c)) {
++                    snprintf(font_cand, sizeof font_cand, "%s/Font2/Scalable/External_kbd.Nin_Ounce_NVN2.bfotf.zs", r);
++                    if (!access(font_cand, F_OK)) {
++                        strlcpy(out, font_cand, n);
++                        free(roots_check);
++                        LOG("fs: serving keyboard button font overlay %s", font_cand);
++                        return 1;
++                    }
++                }
++                free(roots_check);
++            }
++        }
++    }
++    if (strstr(rest, "Common.Product.100.Nin_Ounce_NVN2.bntx")) {
++        if (front_kbd_prompts_active()) {
++            char bntx_cand[1024];
++            char *roots_check = m->overlay[0] ? strdup(m->overlay) : NULL;
++            if (roots_check) {
++                char *save_c = NULL;
++                for (char *r = strtok_r(roots_check, ":", &save_c); r; r = strtok_r(NULL, ":", &save_c)) {
++                    snprintf(bntx_cand, sizeof bntx_cand, "%s/UI/Layout2Archive/Common_kbd.Product.100.Nin_Ounce_NVN2.bntx.zs", r);
++                    if (!access(bntx_cand, F_OK)) {
++                        strlcpy(out, bntx_cand, n);
++                        free(roots_check);
++                        LOG("fs: serving keyboard button texture overlay %s", bntx_cand);
++                        return 1;
++                    }
++                    snprintf(bntx_cand, sizeof bntx_cand, "%s/Common_kbd.Product.100.Nin_Ounce_NVN2.bntx.zs", r);
++                    if (!access(bntx_cand, F_OK)) {
++                        strlcpy(out, bntx_cand, n);
++                        free(roots_check);
++                        LOG("fs: serving keyboard button texture overlay %s", bntx_cand);
++                        return 1;
++                    }
++                }
++                free(roots_check);
++            }
++        }
++    }
+     char *roots = strdup(m->overlay);
+     if (!roots) die("rom overlay path allocation failed");
+     char *save = NULL;
+@@ -408,7 +462,7 @@ static int host_path_ex(const char *p, char *out, size_t n, int *ro, int create)
+         if (ro) *ro = g_mnt[i].ro;
+         char normed[1024]; const char *rest = c + 1;
+         if (strstr(rest, "/.")) { if (!norm_rest(rest, normed, sizeof normed)) return 0; rest = normed; }   // only paths with "." components are normalized; the rest walk component by component as before
+-        if (g_mnt[i].overlay[0] && !create) return rom_overlay_path(&g_mnt[i], rest, out, n);
++        if (!create && rom_overlay_path(&g_mnt[i], rest, out, n)) return 1;
+         strlcpy(out, g_mnt[i].dir, n);
+         while (*rest) {
+             while (*rest == '/') rest++;
+diff --git a/dm/host/hle_hid.c b/dm/host/hle_hid.c
+index 18a72cc..00b03db 100644
+--- a/dm/host/hle_hid.c
++++ b/dm/host/hle_hid.c
+@@ -905,6 +905,21 @@ HLE_FORCE("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_2
+ HLE_FORCE("_ZN2nn3hid24IsVibrationDeviceMountedERKNS0_21VibrationDeviceHandleE", "vibration: device mounted when the channel has an output", unsigned, h_hid_VibMounted, const uint32_t *h) {
+     return h && vib_targets(*h);
+ }
++HLE_FORCE("_ZN2nn3hid29IsOunceVibrationDeviceMountedERKNS0_21VibrationDeviceHandleE", "vibration: ounce device mounted when the channel has an output", unsigned, h_hid_OunceVibMounted, const uint32_t *h) {
++    return h && vib_targets(*h);
++}
++HLE_FORCE("_ZN2nn3hid6detail29IsOunceVibrationDeviceMountedEPbRKNS0_21VibrationDeviceHandleE", "vibration: detail ounce device mounted", Result, h_hid_DetailOunceVibMounted, uint8_t *out, const uint32_t *h) {
++    if (out) *out = (h && vib_targets(*h)) ? 1 : 0;
++    return RES_OK;
++}
++HLE_FORCE("_ZN2nn3hid6detail24IsVibrationDeviceMountedEPbRKNS0_21VibrationDeviceHandleE", "vibration: detail device mounted", Result, h_hid_DetailVibMounted, uint8_t *out, const uint32_t *h) {
++    if (out) *out = (h && vib_targets(*h)) ? 1 : 0;
++    return RES_OK;
++}
++HLE_FORCE("_ZN2nn3hid6detail20IsVibrationPermittedEPb", "vibration: detail vibration permitted", Result, h_hid_DetailVibPermit, uint8_t *out) {
++    if (out) *out = dm_haptics_available() != 0;
++    return RES_OK;
++}
+ HLE_FORCE("_ZN2nn3hid23GetActualVibrationValueEPNS0_14VibrationValueERKNS0_21VibrationDeviceHandleE", "vibration: last accepted channel value", void, h_hid_VibActual, dm_vibration *v, const uint32_t *h) {
+     uint32_t targets = h ? vib_targets(*h) : 0;
+     *v = targets ? dm_haptics_actual(__builtin_ctz(targets), *h >> 16 & 1) : (dm_vibration){0, 160, 0, 320};
+diff --git a/dm/host/hle_sdk16.c b/dm/host/hle_sdk16.c
+index eb7e0f1..8f0696c 100644
+--- a/dm/host/hle_sdk16.c
++++ b/dm/host/hle_sdk16.c
+@@ -88,8 +88,15 @@ static font_t font_get(int type) {
+     pthread_mutex_lock(&font_mu);
+     if (!std_done) { std_done = 1; std_f = font_first("DM_SHARED_FONT", "standard.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf");
+                      if (!std_f.p) LOG("[RED] cannot open the standard shared font (point DM_SHARED_FONT or DM_FONT_DIR/standard.ttf at a TTF)"); }
+-    if (type == 5 && !ext_done) { ext_done = 1; ext_f = font_first("DM_SHARED_FONT_EXT", "nintendo_ext.ttf", NULL);
+-                                  if (!ext_f.p) LOG("[YELLOW] Nintendo extended shared font missing (dm/tools/make_ext_font.py generates nintendo_ext.ttf): button icons will be drawn as '?'"); }
++    if (type == 5 && !ext_done) {
++        ext_done = 1;
++        const char *ext_name = "nintendo_ext.ttf";
++        const char *k = getenv("DM_KBD_LAYOUT_FONT");
++        if (k && (!strcmp(k, "1") || !strcasecmp(k, "kbd") || !strcasecmp(k, "keyboard"))) ext_name = "nintendo_ext_kbd.ttf";
++        ext_f = font_first("DM_SHARED_FONT_EXT", ext_name, NULL);
++        if (!ext_f.p && strcmp(ext_name, "nintendo_ext.ttf") != 0) ext_f = font_first("DM_SHARED_FONT_EXT", "nintendo_ext.ttf", NULL);
++        if (!ext_f.p) LOG("[YELLOW] Nintendo extended shared font missing (dm/tools/make_ext_font.py generates nintendo_ext.ttf): button icons will be drawn as '?'");
++    }
+     font_t f = type == 5 && ext_f.p ? ext_f : std_f;
+     pthread_mutex_unlock(&font_mu);
+     return f;
+diff --git a/dm/host/hle_sf.c b/dm/host/hle_sf.c
+index 9c5c81f..23d0f50 100644
+--- a/dm/host/hle_sf.c
++++ b/dm/host/hle_sf.c
+@@ -17,7 +17,7 @@
+ typedef Result (*sf_answer)(unsigned cmd, uint32_t *copy);
+ static struct { char name[16]; int used, domain; unsigned seen; sf_answer answer; } g_sf[SF_MAX];
+ static pthread_mutex_t g_sf_mu = PTHREAD_MUTEX_INITIALIZER;
+-static const char *const sf_served[] = {"olsc:u", "caps:su", "caps:u", "caps:a", "caps:c", "caps:sc", "caps:ss"};
++static const char *const sf_served[] = {"olsc:u", "caps:su", "caps:u", "caps:a", "caps:c", "caps:sc", "caps:ss", "hid", "hid:dbg", "hid:sys", "hid:tmp", "hid:bus"};
+ 
+ static int sf_slot(uint32_t h) {
+     unsigned i = h - SF_H0;
+@@ -66,6 +66,7 @@ HLE_FORCE("_ZN2nn2sf4hipc20ConnectToHipcServiceEPNS_3svc6HandleEPKc", "connect t
+           uint32_t *out, const char *name) {
+     for (size_t k = 0; k < sizeof sf_served / sizeof *sf_served; k++)
+         if (!strncmp(name, sf_served[k], 8)) { *out = sf_new(sf_served[k], 0, NULL); LOG("sf: %s → host session %#x (every request succeeds with zeroed output)", sf_served[k], *out); return RES_OK; }
++    if (!strncmp(name, "hid", 3)) { *out = sf_new("hid", 0, NULL); LOG("sf: hid fallback → host session %#x", *out); return RES_OK; }
+     LOG("[RED] sf: the game connects to service %.8s itself, which the host does not serve", name);
+     return 0xe15u;   // sm ResultNotRegistered
+ }
+diff --git a/dm/ios/Sources/LauncherSettings.swift b/dm/ios/Sources/LauncherSettings.swift
+index aec4414..54254a1 100644
+--- a/dm/ios/Sources/LauncherSettings.swift
++++ b/dm/ios/Sources/LauncherSettings.swift
+@@ -48,7 +48,7 @@ final class LauncherModel: ObservableObject {
+         self.settings = settings
+         let env = ProcessInfo.processInfo.environment
+         fromLaunch = Set((env["DM_ENV_LAUNCH_KEYS"] ?? "").split(separator: " ").map(String.init))
+-        fixed = fromLaunch.union((env["DM_ENV_FILE_KEYS"] ?? "").split(separator: " ").map(String.init))
++        fixed = []
+         ignoreSaved = env["DM_SAVED_CHOICES"] == "0"
+         if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
+         for s in settings {
+diff --git a/dm/mac/Launcher.swift b/dm/mac/Launcher.swift
+index 4a96434..c1b5a21 100644
+--- a/dm/mac/Launcher.swift
++++ b/dm/mac/Launcher.swift
+@@ -38,7 +38,6 @@ struct LauncherView: View {
+                     settingSections(basic: false)
+                     Section {
+                         Button("Reset to tested defaults") { m.reset() }
+-                            .disabled(!m.changed)
+                     } footer: {
+                         Text("Brings back all settings this game was tested with.")
+                     }
+diff --git a/dm/mac/launcher.c b/dm/mac/launcher.c
+index f962fb6..086adac 100644
+--- a/dm/mac/launcher.c
++++ b/dm/mac/launcher.c
+@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
+     for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) { char env[128]; if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env); }
+     snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
+     snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
+-    setenv("DM_ENV_FILE_KEYS", g_file_keys ? g_file_keys : "", 1); setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
++    setenv("DM_ENV_FILE_KEYS", "", 1); setenv("DM_ENV_LAUNCH_KEYS", g_launch_keys ? g_launch_keys : "", 1);
+     free(g_file_keys); free(g_launch_keys);
+     int window = !(getenv("DM_LAUNCHER") && !strcmp(getenv("DM_LAUNCHER"), "0"));
+     for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
+diff --git a/dm/tools/make_ext_font.py b/dm/tools/make_ext_font.py
+index 4c4d9ba..7711ba0 100644
+--- a/dm/tools/make_ext_font.py
++++ b/dm/tools/make_ext_font.py
+@@ -2,7 +2,7 @@
+ # Generate a stand-in for the "Nintendo extension" shared font (nintendo_ext.ttf): controller-button icons at the original private-use code points (A/B/X/Y, L/R/ZL/ZR/SL/SR, +/−, D-pad, stick direction arrows).
+ # The host has no original system fonts; button icons in game text (e.g. Mario's GameMsg/Key.msbt: U+E0E0 = A button) render as "?" when the glyph is missing. Letters come from macOS's Arial Rounded Bold, knocked out of a solid plate.
+ # Usage: make_ext_font.py out.ttf [letter-font.ttf]; needs fontTools (pip install fonttools)
+-import math, sys
++import math, os, struct, sys
+ from fontTools.ttLib import TTFont
+ from fontTools.fontBuilder import FontBuilder
+ from fontTools.pens.ttGlyphPen import TTGlyphPen
+@@ -11,8 +11,8 @@ from fontTools.pens.reverseContourPen import ReverseContourPen
+ from fontTools.pens.boundsPen import BoundsPen
+ from fontTools.pens.recordingPen import RecordingPen
+ 
+-EM, ASC, DESC = 1000, 880, -120
+-CY, R = 350, 450          # icon centre height and circle radius: -100 to 800, sitting on the baseline
++EM, ASC, DESC = 1000, 700, -300
++CY, R = 300, 270          # icon centre height and circle radius: sits cleanly on text baseline
+ 
+ def area(c): return sum(c[i][0] * c[i - 1][1] - c[i - 1][0] * c[i][1] for i in range(len(c))) / 2
+ def contour(pen, pts, hole=False):
+@@ -44,13 +44,15 @@ def rot(pts, cx, cy, deg):
+ class Letters:
+     def __init__(self, path):
+         self.f = TTFont(path); self.gs = self.f.getGlyphSet(); self.cmap = self.f.getBestCmap()
+-    def knock(self, pen, text, cx, cy, h):
++    def knock(self, pen, text, cx, cy, h, max_w=None):
+         # knock text out of the plate, centred at (cx, cy) with height h
+         names = [self.cmap[ord(ch)] for ch in text]; x = 0; parts = []
+         for nm in names: parts.append((nm, x)); x += self.gs[nm].width
+         bp = BoundsPen(self.gs)
+         for nm, dx in parts: self.gs[nm].draw(TransformPen(bp, (1, 0, 0, 1, dx, 0)))
+         x0, y0, x1, y1 = bp.bounds; s = h / (y1 - y0)
++        if max_w and (x1 - x0) * s > max_w:
++            s = max_w / (x1 - x0)
+         ox, oy = cx - (x0 + x1) / 2 * s, cy - (y0 + y1) / 2 * s
+         # Knocked out = opposite direction to the plate. Fonts differ in outer-contour direction (TrueType clockwise, converted fonts often counter-clockwise); flip based on the largest contour's direction
+         rec = RecordingPen()
+@@ -67,29 +69,39 @@ def cross(cx, cy, half, arm):   # D-pad outline (one closed ring)
+     return [(cx - a, cy + h, 1), (cx + a, cy + h, 1), (cx + a, cy + a, 1), (cx + h, cy + a, 1), (cx + h, cy - a, 1), (cx + a, cy - a, 1),
+             (cx + a, cy - h, 1), (cx - a, cy - h, 1), (cx - a, cy - a, 1), (cx - h, cy - a, 1), (cx - h, cy + a, 1), (cx - a, cy + a, 1)]
+ 
+-def build(out, letter_font):
++def build(out, letter_font, kbd=False):
+     L = Letters(letter_font); glyphs = {}; adv = {}; cmap = {}
+     def glyph(name, codes, width, draw):
+         pen = TTGlyphPen(None); draw(pen, width / 2); glyphs[name] = pen.glyph(); adv[name] = width
+         for c in codes: cmap[c] = name
+-    def round_btn(t):
+-        def d(pen, cx): contour(pen, circle(cx, CY, R)); L.knock(pen, t, cx, CY, 470)
++    def round_btn(t, h=330, max_w=400):
++        def d(pen, cx): contour(pen, circle(cx, CY, R)); L.knock(pen, t, cx, CY, h, max_w=max_w)
+         return d
+-    def plate(t, w, h=620, th=400):
+-        def d(pen, cx): contour(pen, rrect(cx - w / 2, CY - h / 2, cx + w / 2, CY + h / 2, 220)); L.knock(pen, t, cx, CY, th)
++    def space_bracket(pen, cx):
++        contour(pen, circle(cx, CY, R))
++        w, h, t = 280, 90, 44
++        x0, x1 = cx - w / 2, cx + w / 2
++        y0, y1 = CY - h / 2, CY + h / 2
++        pts = [
++            (x0, y1, 1), (x0, y0, 1), (x1, y0, 1), (x1, y1, 1),
++            (x1 - t, y1, 1), (x1 - t, y0 + t, 1), (x0 + t, y0 + t, 1), (x0 + t, y1, 1)
++        ]
++        contour(pen, pts, hole=True)
++    def plate(t, w, h=540, th=310):
++        def d(pen, cx): contour(pen, rrect(cx - w / 2, CY - h / 2, cx + w / 2, CY + h / 2, min(140, w / 4, h / 4))); L.knock(pen, t, cx, CY, th, max_w=w - 100)
+         return d
+     def sign(minus):
+         def d(pen, cx):
+-            contour(pen, circle(cx, CY, R)); t, l = 70, 250
++            contour(pen, circle(cx, CY, R)); t, l = 60, 200
+             if minus: contour(pen, rect(cx - l, CY - t, cx + l, CY + t), hole=True)
+             else: contour(pen, cross(cx, CY, l, 2 * t), hole=True)
+         return d
+     def dpad(arm_dir):   # None = all solid; otherwise only one arm filled
+         def d(pen, cx):
+-            contour(pen, cross(cx, CY, R, 320))
++            contour(pen, cross(cx, CY, R, 220))
+             if arm_dir is None: return
+-            contour(pen, cross(cx, CY, R - 55, 320 - 110), hole=True)
+-            arm = rect(cx - 105, CY + 105, cx + 105, CY + R - 55)
++            contour(pen, cross(cx, CY, R - 40, 220 - 80), hole=True)
++            arm = rect(cx - 70, CY + 70, cx + 70, CY + R - 40)
+             contour(pen, rot(arm, cx, CY, {'up': 0, 'left': 90, 'down': 180, 'right': 270}[arm_dir]))
+         return d
+     def arrow(deg):
+@@ -99,23 +111,51 @@ def build(out, letter_font):
+         return d
+     def stick(t):
+         def d(pen, cx):
+-            contour(pen, circle(cx, CY, R)); contour(pen, circle(cx, CY, R - 70), hole=True); contour(pen, circle(cx, CY, 300))
+-            if t: L.knock(pen, t, cx, CY, 300)
++            contour(pen, circle(cx, CY, R)); contour(pen, circle(cx, CY, R - 50), hole=True); contour(pen, circle(cx, CY, 200))
++            if t: L.knock(pen, t, cx, CY, 220)
+         return d
+ 
+     pen = TTGlyphPen(None); glyphs['.notdef'] = pen.glyph(); adv['.notdef'] = 500
+-    for i, t in enumerate(['A', 'B', 'X', 'Y']): glyph('btn' + t, [0xE0A0 + i, 0xE0E0 + i], 1000, round_btn(t))
+-    for i, (t, w) in enumerate([('L', 900), ('R', 900), ('ZL', 1200), ('ZR', 1200), ('SL', 1200), ('SR', 1200)]):
+-        glyph('btn' + t, [0xE0A4 + i, 0xE0E4 + i], w + 100, plate(t, w))
+-    glyph('btnPlus', [0xE0B5, 0xE0EF], 1000, sign(False)); glyph('btnMinus', [0xE0B6, 0xE0F0], 1000, sign(True))
+-    glyph('dpad', [0xE0EA], 1000, dpad(None))
+-    for c, dr in [(0xE0AB, 'right'), (0xE0AC, 'down'), (0xE0AD, 'up'), (0xE0AE, 'left')]: glyph('dpad_' + dr, [c, c + 0x40], 1000, dpad(dr))
+-    for c, (nm, deg) in zip(range(0xE090, 0xE098), [('right', 0), ('left', 180), ('up', 90), ('down', 270), ('rightup', 45), ('rightdown', 315), ('leftdown', 225), ('leftup', 135)]):
+-        glyph('arrow_' + nm, [c], 1000, arrow(deg))
+-    glyph('stick', [0xE100], 1000, stick(None)); glyph('stickL', [0xE101, 0xE0C1], 1000, stick('L')); glyph('stickR', [0xE102, 0xE0C2], 1000, stick('R'))
++    pen_sp = TTGlyphPen(None); glyphs['space'] = pen_sp.glyph(); adv['space'] = 500; cmap[0x20] = 'space'
++    if kbd:
++        # Standard circular buttons (width 640, radius 270)
++        # Using Apple SF Symbols from SFNSRounded.ttf
++        glyph('btnA', [0xE040, 0xE0A0, 0xE0E0], 640, round_btn('\u23CE', 310))   # Return / Enter ⏎
++        glyph('btnB', [0xE041, 0xE0A1, 0xE0E1], 640, round_btn('\u232B', 280))   # Delete / Backspace ⌫
++        glyph('btnX', [0xE042, 0xE0A2, 0xE0E2], 640, space_bracket)              # Space ␣
++        glyph('btnY', [0xE043, 0xE0A3, 0xE0E3], 640, round_btn('Click', 150))    # Click
++        glyph('btnL', [0xE044, 0xE0A4, 0xE0E4], 640, round_btn('L', 330))
++        glyph('btnR', [0xE045, 0xE0A5, 0xE0E5], 640, round_btn('\u21E7', 310))   # Shift ⇧
++        glyph('btnZL', [0xE046, 0xE0A6, 0xE0E6], 640, round_btn('Z', 330))
++        glyph('btnZR', [0xE047, 0xE0A7, 0xE0E7], 640, round_btn('C', 330))
++        glyph('btnSL', [0xE0A8, 0xE0E8], 720, plate('SL', 640, h=500, th=280))
++        glyph('btnSR', [0xE0A9, 0xE0E9], 720, plate('SR', 640, h=500, th=280))
++        glyph('btnPlus', [0xE04B, 0xE0B5, 0xE0EF], 720, plate('Tab', 640, h=500, th=260))
++        glyph('btnMinus', [0xE04C, 0xE0B6, 0xE0F0], 640, round_btn('M', 330))
++        # D-pad arrows: separate Up/Down/Left/Right so Navi (0xE060) and menus get true arrow icons
++        glyph('dpadUp', [0xE060], 640, round_btn('\u2191', 320))                 # Up Arrow ↑ (Navi talk)
++        glyph('dpadDown', [0xE061], 640, round_btn('\u2193', 320))               # Down Arrow ↓
++        glyph('dpadLeft', [0xE062], 640, round_btn('\u2190', 320))               # Left Arrow ←
++        glyph('dpadRight', [0xE063], 640, round_btn('\u2192', 320))              # Right Arrow →
++        glyph('dpad', [0xE064, 0xE065, 0xE049, 0xE06A, 0xE048], 640, lambda pen, cx: contour(pen, cross(cx, CY, R, 220)))
++        # Compact movement & mouse plates
++        glyph('stickL', [0xE05E, 0xE050, 0xE052, 0xE054, 0xE056, 0xE058, 0xE05A, 0xE05C, 0xE101, 0xE0C1], 800, plate('WASD', 720, h=500, th=260))
++        glyph('stickR', [0xE05F, 0xE051, 0xE053, 0xE055, 0xE057, 0xE059, 0xE05B, 0xE05D, 0xE068, 0xE102, 0xE0C2], 850, plate('Mouse', 770, h=500, th=260))
++        glyph('stick', [0xE100], 850, plate('Mouse', 770, h=500, th=260))
++    else:
++        for i, t in enumerate(['A', 'B', 'X', 'Y']): glyph('btn' + t, [0xE040 + i, 0xE0A0 + i, 0xE0E0 + i], 640, round_btn(t))
++        for i, (t, w) in enumerate([('L', 720), ('R', 720), ('ZL', 720), ('ZR', 720)]):
++            glyph('btn' + t, [0xE044 + i, 0xE0A4 + i, 0xE0E4 + i], w, plate(t, w - 80, h=540, th=330))
++        for i, (t, w) in enumerate([('SL', 1000), ('SR', 1000)]):
++            glyph('btn' + t, [0xE0A8 + i, 0xE0E8 + i], w, plate(t, w - 100, h=540, th=330))
++        glyph('btnPlus', [0xE04B, 0xE0B5, 0xE0EF], 640, sign(False)); glyph('btnMinus', [0xE04C, 0xE0B6, 0xE0F0], 640, sign(True))
++        glyph('stick', [0xE100], 700, stick(None))
++        glyph('stickL', [0xE05E, 0xE050, 0xE052, 0xE054, 0xE056, 0xE058, 0xE05A, 0xE05C, 0xE101, 0xE0C1], 700, stick('L'))
++        glyph('stickR', [0xE05F, 0xE051, 0xE053, 0xE055, 0xE057, 0xE059, 0xE05B, 0xE05D, 0xE068, 0xE102, 0xE0C2], 700, stick('R'))
++        glyph('dpad', [0xE060, 0xE061, 0xE062, 0xE063, 0xE064, 0xE065, 0xE049, 0xE06A, 0xE048], 700, dpad(None))
+     # The other code points of the private-use block the real font covers get a plain ring: a game may take one of its glyphs without a null check (Super Mario 3D All-Stars' launcher
+     # sets U+E06B as its font's alternate character at boot and read through the null glyph), and in text a ring is no worse than the "?" of a missing icon
+-    glyph('icon', [c for c in range(0xE000, 0xE200) if c not in cmap], 1000, lambda pen, cx: (contour(pen, circle(cx, CY, R)), contour(pen, circle(cx, CY, R - 70), hole=True)))
++    glyph('icon', [c for c in range(0xE000, 0xE200) if c not in cmap], 640, lambda pen, cx: (contour(pen, circle(cx, CY, R)), contour(pen, circle(cx, CY, R - 50), hole=True)))
+ 
+     order = ['.notdef'] + sorted(n for n in glyphs if n != '.notdef')
+     fb = FontBuilder(EM, isTTF=True)
+@@ -129,6 +169,38 @@ def build(out, letter_font):
+     fb.setupPost(); fb.save(out)
+     print('%s: %d glyphs, %d code points' % (out, len(order), len(cmap)))
+ 
++def encode_bfotf_zs(ttf_path, out_zs_path, dict_path=None):
++    with open(ttf_path, 'rb') as f:
++        ttf_data = bytearray(f.read())
++    while len(ttf_data) % 4 != 0:
++        ttf_data.append(0)
++    key = 0x028501a6
++    enc = bytearray(8 + len(ttf_data))
++    struct.pack_into('<I', enc, 0, 0x1a879bd9)
++    w1 = struct.unpack('<I', struct.pack('>I', len(ttf_data)))[0] ^ key
++    struct.pack_into('<I', enc, 4, w1)
++    for i in range(0, len(ttf_data), 4):
++        w = struct.unpack_from('<I', ttf_data, i)[0]
++        struct.pack_into('<I', enc, 8 + i, w ^ key)
++    import zstandard
++    dict_data = None
++    if dict_path and os.path.isfile(dict_path):
++        with open(dict_path, 'rb') as f:
++            dict_data = zstandard.ZstdCompressionDict(f.read())
++    cctx = zstandard.ZstdCompressor(dict_data=dict_data)
++    comp = cctx.compress(enc)
++    os.makedirs(os.path.dirname(os.path.abspath(out_zs_path)), exist_ok=True)
++    with open(out_zs_path, 'wb') as f:
++        f.write(comp)
++    print(f'{out_zs_path}: packed BFOTF+zstd ({len(comp)} bytes)')
++
+ if __name__ == '__main__':
+-    if len(sys.argv) < 2: sys.exit(__doc__ or 'usage: make_ext_font.py out.ttf [letter-font.ttf]')
+-    build(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf')
++    args = [a for a in sys.argv[1:] if not a.startswith('--')]
++    kbd_flag = '--kbd' in sys.argv
++    bfotf_zs = next((a.split('=', 1)[1] for a in sys.argv[1:] if a.startswith('--bfotf=')), None)
++    zsdic = next((a.split('=', 1)[1] for a in sys.argv[1:] if a.startswith('--dict=')), None)
++    if not args: sys.exit(__doc__ or 'usage: make_ext_font.py [--kbd] [--bfotf=out.bfotf.zs] [--dict=zs.zsdic] out.ttf [letter-font.ttf]')
++    default_font = '/System/Library/Fonts/SFNSRounded.ttf' if os.path.exists('/System/Library/Fonts/SFNSRounded.ttf') else '/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf'
++    build(args[0], args[1] if len(args) > 1 else default_font, kbd=kbd_flag)
++    if bfotf_zs:
++        encode_bfotf_zs(args[0], bfotf_zs, zsdic)
