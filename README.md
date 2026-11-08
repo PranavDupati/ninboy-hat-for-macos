@@ -148,7 +148,7 @@ This project builds upon the groundbreaking reverse engineering and native trans
 
 - **[seedds/nxnative](https://github.com/seedds/nxnative)** — The foundational AArch64 translation layer and Switch HLE host architecture.
 - **[cheemu21/kid-with-sword-remake](https://github.com/cheemu21/kid-with-sword-remake)** — Game-specific HLE overrides, NVN2 translation, and platform adaptations.
-- **[UzenUPoZiTiV4ik/fsr4-native-macos](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos)** — AMD FidelityFX Super Resolution 4 native Apple Silicon Metal implementation.
+- **[UzenUPoZiTiV4ik/fsr4-native-macos](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos)** by **PoZiTiV4ik** ([@UzenUPoZiTiV4ik](https://github.com/UzenUPoZiTiV4ik)) and contributors ([@fourlexboehm](https://github.com/fourlexboehm), [@d45h71](https://github.com/d45h71)) — The native Apple Silicon Metal implementation of AMD FidelityFX Super Resolution 4 (FSR 4.1.2 INT8 ML upscaler & frame generation pipeline).
 - **[@itsawful911 on X](https://x.com/itsawful911/status/2119149308444565564)** and the **Reddit `r/SwitchPirates2`** community — Performance tuning research, shader pipeline discovery, and stutter mitigation analysis.
 - **Apple Developer** — [Metal & MetalFX Documentation](https://developer.apple.com/metal/) for spatial upscaling and frame interpolation APIs.
 
