@@ -1,13 +1,27 @@
-# Engine performance & RAM optimizations (tuned for 16 GB Apple Silicon unified memory)
+# Stop background pipeline generation (archive holds all 42k shaders already)
+DM_PSO_MANIFEST=off
+
+# Upscaler Optimization: Hardware MetalFX instead of heavy NDSR neural network
+DM_UPSCALER=metalfx
+DM_PRESENT_UPSCALE=off
+
+# Smooth Pacing: Disable artificial 20-24 fps vsync hold
+DM_FPS_HOLD=off
+
+# CPU & GPU Thread Scheduling Boost
+DM_FRAME_WG=1
+DM_NVN_ENC_THREAD=1
+
+# Memory & Swap Optimization (16 GB unified memory Mac)
 DM_GUEST_FILE=1
 DM_GUEST_FILE_CHUNK=1G
-DM_PSO_PREPARE=0
 DM_TEX_RELEASE=1
 DM_TEX_RELEASE_METHOD=free
 DM_NVN_TEX_SOFT=1
 DM_NVN_TEX_SOFT_ARRAYS=0
 DM_NVN_TEX_SOFT_LEVELS=1
-DM_PRESENT_UPSCALE=fsr4
+
+# Engine performance & Overlap
 DM_THERMAL_CAP=0
 DM_ALIAS_SIZE=0x200000000
 DM_NVN_DISPATCH_OVERLAP=1

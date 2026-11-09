@@ -9,13 +9,50 @@ set -eo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.dotnet:${PATH:-}"
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
-REPO="${REPO:-$HOME/kid-with-sword-remake}"
 SUPPORT_DIR="${SUPPORT_DIR:-$HOME/Library/Application Support/NinboyHat}"
+REPO="${REPO:-}"
 GAMES_DIR="${GAMES_DIR:-$HOME/Documents/Switch 2 Games}"
 NUP="${NUP:-$GAMES_DIR/The Legend of Zelda Ocarina of Time.nup}"
 WORK="${WORK:-$GAMES_DIR/0400486024DEC000_build-kid}"
 APP="${APP:-$GAMES_DIR/Ocarina of Time.app}"
 LOG="${LOG:-$HOME/Downloads/oot-native-build.log}"
+
+# Find or auto-provision the base translation engine
+find_or_setup_engine() {
+    if [ -n "$REPO" ] && [ -f "$REPO/scripts/build_ipa_from_nsp.py" ]; then
+        return 0
+    fi
+
+    # Check known local candidates
+    for candidate in \
+        "$BUNDLE_RESOURCES" \
+        "$SUPPORT_DIR/engine" \
+        "$HOME/kid-with-sword-remake" \
+        "$HOME/ninboy-hat-for-macos" \
+        "$(cd "$(dirname "$0")/.." && pwd)" \
+        "$(pwd)"; do
+        if [ -n "$candidate" ] && [ -f "$candidate/scripts/build_ipa_from_nsp.py" ]; then
+            REPO="$candidate"
+            echo "  ✓ Base engine found at $REPO"
+            return 0
+        fi
+    done
+
+    # Provision base engine automatically into Application Support
+    echo "==> Base engine not found locally. Downloading base translation engine from GitHub..."
+    mkdir -p "$SUPPORT_DIR"
+    if ! command -v git >/dev/null 2>&1; then
+        echo "✗ Error: git is required to download the open-source translation engine. Please run 'xcode-select --install'."
+        exit 1
+    fi
+
+    if [ ! -d "$SUPPORT_DIR/engine/.git" ]; then
+        rm -rf "$SUPPORT_DIR/engine"
+        git clone --depth 1 https://github.com/cheemu21/kid-with-sword-remake.git "$SUPPORT_DIR/engine"
+    fi
+    REPO="$SUPPORT_DIR/engine"
+    echo "  ✓ Base engine provisioned at $REPO"
+}
 
 # Discover or provision Python environment
 find_or_setup_python() {
@@ -89,6 +126,9 @@ doctor() {
         OK=0
     fi
 
+    # Check translation engine
+    find_or_setup_engine || OK=0
+
     # Check container file
     if [ -f "$NUP" ]; then
         local NUP_SIZE
@@ -145,6 +185,8 @@ build_overlays() {
 
 package_app() {
     echo "==> [3/3] Packaging Standalone macOS App Bundle & Pipeline Archive" | tee -a "$LOG"
+    find_or_setup_engine
+    find_or_setup_python
     "$PY" "$REPO/scripts/build_ipa_from_nsp.py" "$NUP" \
         --platform mac-app \
         --work-dir "$WORK" \

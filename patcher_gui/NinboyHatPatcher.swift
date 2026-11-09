@@ -122,18 +122,20 @@ class PatcherModel: ObservableObject {
         
         var envTxt = "# Ninboy Hat Engine Environment (RAM & Swap Optimized for 16 GB unified memory)\n"
         if ramOptimization {
+            envTxt += "DM_PSO_MANIFEST=off\n"
             envTxt += "DM_GUEST_FILE=1\n"
             envTxt += "DM_GUEST_FILE_CHUNK=1G\n"
-            envTxt += "DM_PSO_PREPARE=0\n"
             envTxt += "DM_TEX_RELEASE_METHOD=free\n"
             envTxt += "DM_NVN_TEX_SOFT=1\n"
             envTxt += "DM_NVN_TEX_SOFT_ARRAYS=0\n"
             envTxt += "DM_NVN_TEX_SOFT_LEVELS=1\n"
-        } else {
-            envTxt += "DM_PSO_PREPARE=1\n"
         }
+        envTxt += "DM_UPSCALER=metalfx\n"
+        envTxt += "DM_PRESENT_UPSCALE=off\n"
+        envTxt += "DM_FPS_HOLD=off\n"
+        envTxt += "DM_FRAME_WG=1\n"
+        envTxt += "DM_NVN_ENC_THREAD=1\n"
         envTxt += "DM_TEX_RELEASE=\(hyruleTextureFix ? "1" : "2")\n"
-        envTxt += "DM_PRESENT_UPSCALE=\(upscaler)\n"
         envTxt += "DM_THERMAL_CAP=0\n"
         envTxt += "DM_ALIAS_SIZE=0x200000000\n"
         envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
@@ -198,15 +200,47 @@ class PatcherModel: ObservableObject {
     private func executeBuildPipeline() {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
-        let repo = "\(home)/kid-with-sword-remake"
-        let scriptPath = "\(repo)/build_native_port.sh"
+        let supportDir = "\(home)/Library/Application Support/NinboyHat"
+        try? fm.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
         
-        guard fm.fileExists(atPath: scriptPath) else {
+        // 1. Locate build_native_port.sh in Bundle resources, support dir, or development repo
+        var scriptPath: String? = nil
+        let candidateScripts = [
+            Bundle.main.resourcePath.map { "\($0)/build_native_port.sh" },
+            "\(supportDir)/build_native_port.sh",
+            "\(home)/kid-with-sword-remake/build_native_port.sh",
+            "\(home)/ninboy-hat-for-macos/build_native_port.sh"
+        ].compactMap { $0 }
+        
+        for candidate in candidateScripts {
+            if fm.fileExists(atPath: candidate) {
+                scriptPath = candidate
+                break
+            }
+        }
+        
+        guard let finalScript = scriptPath, fm.fileExists(atPath: finalScript) else {
             DispatchQueue.main.async {
                 self.isBuilding = false
-                self.buildError = "Build script not found at \(scriptPath)."
+                self.buildError = "Build script could not be located inside 'Ninboy Hat Patcher.app/Contents/Resources/' or system paths. If running from DMG, please drag the app to Applications first."
             }
             return
+        }
+        
+        // 2. Identify or provision the translation engine
+        var repo = "\(supportDir)/engine"
+        let candidateRepos = [
+            "\(home)/kid-with-sword-remake",
+            "\(supportDir)/engine",
+            "\(home)/ninboy-hat-for-macos",
+            Bundle.main.resourcePath
+        ].compactMap { $0 }
+        
+        for r in candidateRepos {
+            if fm.fileExists(atPath: "\(r)/scripts/build_ipa_from_nsp.py") {
+                repo = r
+                break
+            }
         }
         
         // Update mac_env.txt and nxnative Application Support with chosen options
@@ -221,15 +255,23 @@ class PatcherModel: ObservableObject {
         let canFastPackage = fm.fileExists(atPath: psoArchive)
         
         let action = canFastPackage ? "--app-only" : "--all"
-        proc.arguments = [scriptPath, action]
+        proc.arguments = [finalScript, action]
         
         var env = ProcessInfo.processInfo.environment
         env["REPO"] = repo
-        env["PY"] = "\(home)/nxnative/.venv/bin/python3"
+        env["SUPPORT_DIR"] = supportDir
         env["GAMES_DIR"] = outputDirectory
         env["NUP"] = nupPath
         env["WORK"] = workDir
         env["APP"] = "\(outputDirectory)/Ocarina of Time.app"
+        if let res = Bundle.main.resourcePath {
+            env["BUNDLE_RESOURCES"] = res
+        }
+        if fm.fileExists(atPath: "\(supportDir)/venv/bin/python3") {
+            env["PY"] = "\(supportDir)/venv/bin/python3"
+        } else if fm.fileExists(atPath: "\(home)/nxnative/.venv/bin/python3") {
+            env["PY"] = "\(home)/nxnative/.venv/bin/python3"
+        }
         proc.environment = env
         
         let pipe = Pipe()
@@ -455,7 +497,7 @@ struct PatcherMainView: View {
                 }
                 
                 // Section: Progress & Status
-                if model.isBuilding || model.isAppBuilt {
+                if model.isBuilding || model.isAppBuilt || model.buildError != nil {
                     Section {
                         if model.isBuilding {
                             VStack(alignment: .leading, spacing: 8) {
@@ -468,7 +510,7 @@ struct PatcherMainView: View {
                                 }
                                 ProgressView(value: model.buildProgress, total: 1.0)
                             }
-                        } else if model.isAppBuilt {
+                        } else if model.isAppBuilt && model.buildError == nil {
                             HStack {
                                 Label("Ocarina of Time.app is ready (33.7 GB, 30,515 precompiled pipelines)", systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
@@ -481,9 +523,19 @@ struct PatcherMainView: View {
                         }
                         
                         if let err = model.buildError {
-                            Text(err)
-                                .foregroundStyle(.red)
-                                .font(.caption)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.red)
+                                    Text("Build Notice")
+                                        .font(.subheadline.bold())
+                                        .foregroundStyle(.red)
+                                }
+                                Text(err)
+                                    .font(.caption)
+                                    .foregroundStyle(.primary)
+                            }
+                            .padding(.vertical, 4)
                         }
                         
                         DisclosureGroup("Show build output log", isExpanded: $showLog) {

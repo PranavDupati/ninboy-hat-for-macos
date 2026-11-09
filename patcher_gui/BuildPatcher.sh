@@ -36,17 +36,14 @@ if [ -f "$HOME/Documents/Switch 2 Games/Ocarina of Time.app/Contents/Resources/A
        "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
-# Bundle mods, tools, configs, and scripts inside the app bundle
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-mkdir -p "$APP_BUNDLE/Contents/Resources/scripts"
-mkdir -p "$APP_BUNDLE/Contents/Resources/tools"
-mkdir -p "$APP_BUNDLE/Contents/Resources/config"
-mkdir -p "$APP_BUNDLE/Contents/Resources/patches"
-
-cp -r "$ROOT_DIR/scripts/"* "$APP_BUNDLE/Contents/Resources/scripts/" 2>/dev/null || true
-cp -r "$ROOT_DIR/tools/"* "$APP_BUNDLE/Contents/Resources/tools/" 2>/dev/null || true
-cp -r "$ROOT_DIR/config/"* "$APP_BUNDLE/Contents/Resources/config/" 2>/dev/null || true
-cp -r "$ROOT_DIR/patches/"* "$APP_BUNDLE/Contents/Resources/patches/" 2>/dev/null || true
+# Bundle build scripts, configs, tools and mods directly into App Resources
+echo "==> Bundling build scripts & patch assets into App Resources..."
+cp "$SCRIPT_DIR/../build_native_port.sh" "$APP_BUNDLE/Contents/Resources/build_native_port.sh"
+chmod +x "$APP_BUNDLE/Contents/Resources/build_native_port.sh"
+cp -R "$SCRIPT_DIR/../config" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+cp -R "$SCRIPT_DIR/../patches" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+cp -R "$SCRIPT_DIR/../romfs_mods" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+cp -R "$SCRIPT_DIR/../tools" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
 
 echo "==> [3/4] Signing App Bundle (ad-hoc)..."
 codesign -f -s - "$APP_BUNDLE"
