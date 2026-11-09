@@ -99,7 +99,25 @@ ninboy-hat-for-macos/
 
 ## Getting Started
 
-### 1. Applying the Patch to Upstream Source
+### 🖱️ Method 1: One-Click Native GUI Patcher (Recommended)
+
+A native macOS application (`Ninboy Hat Patcher.app`) is provided that matches the game's launcher design. It allows you to select your `.nup` container and apply all modifications with a single click.
+
+1. **Build or Launch the Patcher App:**
+   ```bash
+   ./patcher_gui/BuildPatcher.sh
+   open "$HOME/Documents/Switch 2 Games/Ninboy Hat Patcher.app"
+   ```
+2. **Select your `.nup` file:** Click "Choose File..." to locate your legally dumped `The Legend of Zelda Ocarina of Time.nup`.
+3. **Configure Options:** Adjust Frame Rate (30 / 60 / Unlocked), Console Mode, Upscaling (MetalFX / FSR 4), and Keyboard Prompts.
+4. **Click "Apply Patches & Build App":** The patcher automatically unpacks the game, applies the RomFS keyboard overlays, configures the offline Metal 4 pipeline archive (3.2 GB, 0% stutter), and codesigns the resulting `Ocarina of Time.app`.
+5. **Click "Play"** to launch directly into the game!
+
+---
+
+### 💻 Method 2: Command-Line Build
+
+#### 1. Applying the Patch to Upstream Source
 
 Clone the native translation layer base repository and apply the unified patch:
 
