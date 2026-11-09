@@ -16,6 +16,7 @@ NUP="${NUP:-$GAMES_DIR/The Legend of Zelda Ocarina of Time.nup}"
 WORK="${WORK:-$GAMES_DIR/0400486024DEC000_build-kid}"
 APP="${APP:-$GAMES_DIR/Ocarina of Time.app}"
 LOG="${LOG:-$HOME/Downloads/oot-native-build.log}"
+GAME_LANG="${GAME_LANG:-${DM_LANG:-en-US}}"
 
 # Find or auto-provision the base translation engine
 find_or_setup_engine() {
@@ -316,10 +317,12 @@ build_base() {
     else
         echo "  ! shader_seen.tsv not found; translating full shader catalog" | tee -a "$LOG"
     fi
+    echo "  ✓ Game Language: $GAME_LANG" | tee -a "$LOG"
     "$PY" "$REPO/scripts/build_ipa_from_nsp.py" "$NUP" \
         --platform mac \
         --work-dir "$WORK" \
         --keep-extracted \
+        --lang "$GAME_LANG" \
         $SEEN_FLAG \
         --allow-damaged \
         --allow-other-metal \
@@ -342,17 +345,20 @@ package_app() {
     if [ -f "$REPO/dm/games/0400486024DEC000/shader_seen.tsv" ]; then
         SEEN_FLAG="--seen-shaders"
     fi
+    echo "  ✓ Game Language: $GAME_LANG" | tee -a "$LOG"
     "$PY" "$REPO/scripts/build_ipa_from_nsp.py" "$NUP" \
         --platform mac-app \
         --work-dir "$WORK" \
         --keep-extracted \
+        --lang "$GAME_LANG" \
         $SEEN_FLAG \
         --allow-damaged \
         --allow-other-metal \
         --env-file "$REPO/mac_env.txt" \
         -o "$APP" 2>&1 | tee -a "$LOG"
 
-    # Ensure macOS Game Mode and Controller support flags are enabled in Info.plist
+    # Ensure macOS Game Mode and Language flags are configured in Info.plist
+    plutil -replace DMLanguage -string "$GAME_LANG" "$APP/Contents/Info.plist" 2>/dev/null || true
     plutil -replace LSSupportsGameMode -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
     plutil -replace GCSupportsGameMode -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
     plutil -replace GCSupportsControllerUserInteraction -bool true "$APP/Contents/Info.plist" 2>/dev/null || true

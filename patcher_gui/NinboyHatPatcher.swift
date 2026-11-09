@@ -138,6 +138,7 @@ class PatcherModel: ObservableObject {
         envTxt += "DM_TEX_RELEASE=1\n"
         envTxt += "DM_FULLSCREEN=\(displayMode)\n"
         envTxt += "DM_FOCUS_KEEP=1\n"
+        envTxt += "DM_LANG=\(gameLanguage)\n"
         envTxt += "DM_THERMAL_CAP=0\n"
         envTxt += "DM_ALIAS_SIZE=0x200000000\n"
         envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
@@ -160,7 +161,8 @@ class PatcherModel: ObservableObject {
                 ("GCSupportsGameMode", "-bool", "true"),
                 ("GCSupportsControllerUserInteraction", "-bool", "true"),
                 ("LSApplicationCategoryType", "-string", "public.app-category.games"),
-                ("NSPrincipalClass", "-string", "NSApplication")
+                ("NSPrincipalClass", "-string", "NSApplication"),
+                ("DMLanguage", "-string", gameLanguage)
             ]
             for (key, type, val) in keys {
                 let p = Process()
@@ -169,6 +171,13 @@ class PatcherModel: ObservableObject {
                 try? p.run()
                 p.waitUntilExit()
             }
+
+            let bundleID = "org.nxnative.0400486024dec000"
+            let pDef = Process()
+            pDef.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+            pDef.arguments = ["write", bundleID, "launcher.DM_LANG", gameLanguage]
+            try? pDef.run()
+            pDef.waitUntilExit()
 
             let pXattr = Process()
             pXattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
@@ -198,7 +207,6 @@ class PatcherModel: ObservableObject {
             }
 
             // Register LSIdentifiedGame bookmark for macOS Game Mode policy
-            let bundleID = "org.nxnative.0400486024dec000"
             let lsPlistPath = ("~/Library/Preferences/com.apple.LaunchServices/com.apple.LaunchServices.plist" as NSString).expandingTildeInPath
             if let bookmark = try? URL(fileURLWithPath: builtAppPath).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
                let plistData = try? Data(contentsOf: URL(fileURLWithPath: lsPlistPath)),
@@ -357,6 +365,8 @@ class PatcherModel: ObservableObject {
         env["NUP"] = nupPath
         env["WORK"] = workDir
         env["APP"] = "\(outputDirectory)/Ocarina of Time.app"
+        env["GAME_LANG"] = gameLanguage
+        env["DM_LANG"] = gameLanguage
         if let res = Bundle.main.resourcePath {
             env["BUNDLE_RESOURCES"] = res
         }
@@ -804,13 +814,15 @@ struct PatcherMainView: View {
                     }
                     
                     Picker("Game language", selection: $model.gameLanguage) {
-                        Text("American English").tag("en-US")
-                        Text("Japanese").tag("ja")
-                        Text("European English").tag("en-GB")
-                        Text("French").tag("fr")
-                        Text("German").tag("de")
-                        Text("Italian").tag("it")
-                        Text("Spanish").tag("es")
+                        Text("American English (en-US)").tag("en-US")
+                        Text("European English (en-GB)").tag("en-GB")
+                        Text("Japanese (ja)").tag("ja")
+                        Text("French (fr)").tag("fr")
+                        Text("German (de)").tag("de")
+                        Text("Italian (it)").tag("it")
+                        Text("Spanish (es)").tag("es")
+                        Text("Latin American Spanish (es-419)").tag("es-419")
+                        Text("Dutch (nl)").tag("nl")
                     }
                     
                     Picker("Display mode", selection: $model.displayMode) {
