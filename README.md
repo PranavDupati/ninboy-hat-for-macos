@@ -149,10 +149,15 @@ python3 tools/make_ext_font.py
 Run the automated build script:
 
 ```bash
+# Run preflight system diagnostic check
+./scripts/build_native_port.sh --doctor
+
+# Full native build & package
 ./scripts/build_native_port.sh --all
 ```
 
 Options:
+- `--doctor`: Run preflight diagnostics on Apple Silicon, Metal, and Python tools.
 - `--all`: Full pipeline (extract, translate shaders, build overlays, package `.app`).
 - `--app-only`: Package standalone `.app` using cached shaders and build.
 - `--run`: Launch the game immediately.
@@ -166,6 +171,7 @@ This project builds upon the groundbreaking reverse engineering and native trans
 
 - **[seedds/nxnative](https://github.com/seedds/nxnative)** — The foundational AArch64 translation layer and Switch HLE host architecture.
 - **[cheemu21/kid-with-sword-remake](https://github.com/cheemu21/kid-with-sword-remake)** — Game-specific HLE overrides, NVN2 translation, and platform adaptations.
+- **[adi0900/GreenKid-MV](https://github.com/adi0900/GreenKid-MV)** by **adi0900** — Core inspiration for automated Python environment sandboxing via `uv`, the preflight `--doctor` system diagnostics architecture, and automated repository sanitization checks.
 - **[UzenUPoZiTiV4ik/fsr4-native-macos](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos)** by **PoZiTiV4ik** ([@UzenUPoZiTiV4ik](https://github.com/UzenUPoZiTiV4ik)) and contributors ([@fourlexboehm](https://github.com/fourlexboehm), [@d45h71](https://github.com/d45h71)) — The native Apple Silicon Metal implementation of AMD FidelityFX Super Resolution 4 (FSR 4.1.2 INT8 ML upscaler & frame generation pipeline).
 - **[@itsawful911 on X](https://x.com/itsawful911/status/2119149308444565564)** and the **Reddit `r/SwitchPirates2`** community — Performance tuning research, shader pipeline discovery, and stutter mitigation analysis.
 - **Apple Developer** — [Metal & MetalFX Documentation](https://developer.apple.com/metal/) for spatial upscaling and frame interpolation APIs.

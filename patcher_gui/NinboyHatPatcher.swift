@@ -50,6 +50,8 @@ class PatcherModel: ObservableObject {
     @Published var logLines: [String] = []
     @Published var buildError: String? = nil
     @Published var autoLaunchOnComplete: Bool = true
+    @Published var doctorReport: String? = nil
+    @Published var isRunningDoctor: Bool = false
     
     private var process: Process?
     
@@ -123,6 +125,41 @@ class PatcherModel: ObservableObject {
         guard !builtAppPath.isEmpty else { return }
         let url = URL(fileURLWithPath: builtAppPath)
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+    
+    func runDoctor() {
+        isRunningDoctor = true
+        doctorReport = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let repo = self.findRepoDirectory()
+            let scriptPath = FileManager.default.fileExists(atPath: "\(repo)/build_native_port.sh") ? "\(repo)/build_native_port.sh" : "\(repo)/scripts/build_native_port.sh"
+            
+            guard FileManager.default.fileExists(atPath: scriptPath) else {
+                DispatchQueue.main.async {
+                    self.isRunningDoctor = false
+                    self.doctorReport = "Build script not found at \(scriptPath)."
+                }
+                return
+            }
+            
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+            proc.arguments = [scriptPath, "--doctor"]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            try? proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? "Diagnostics finished."
+            
+            DispatchQueue.main.async {
+                self.isRunningDoctor = false
+                self.doctorReport = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.logLines.append(contentsOf: output.components(separatedBy: .newlines).filter { !$0.isEmpty })
+            }
+        }
     }
     
     func startBuild() {
@@ -448,6 +485,34 @@ struct PatcherMainView: View {
                                 .foregroundStyle(.secondary)
                             Button("Choose...") { chooseOutputDir() }
                         }
+                        
+                        Divider().padding(.vertical, 4)
+                        
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("System Preflight Diagnostics")
+                                    .font(.subheadline.weight(.medium))
+                                Text("Verify Apple Silicon, Metal toolchain, and Python tools")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(model.isRunningDoctor ? "Checking..." : "Run Doctor") {
+                                model.runDoctor()
+                            }
+                            .disabled(model.isRunningDoctor)
+                        }
+                        
+                        if let rep = model.doctorReport {
+                            Text(rep)
+                                .font(.system(size: 10, design: .monospaced))
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        
+                        Divider().padding(.vertical, 4)
                         
                         Button("Reset to tested defaults") {
                             model.resetToDefaults()
