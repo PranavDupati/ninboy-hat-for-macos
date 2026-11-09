@@ -155,16 +155,50 @@ class PatcherModel: ObservableObject {
         }
     }
     
-    private func executeBuildPipeline() {
+    private func findRepoDirectory() -> String {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser.path
-        let repo = "\(home)/kid-with-sword-remake"
-        let scriptPath = "\(repo)/build_native_port.sh"
+        let candidates = [
+            "\(home)/kid-with-sword-remake",
+            "\(home)/ninboy-hat-for-macos",
+            "\(home)/Documents/Switch 2 Games/ninboy-hat-for-macos",
+            Bundle.main.resourcePath ?? "",
+            Bundle.main.bundleURL.deletingLastPathComponent().path
+        ]
+        for c in candidates where !c.isEmpty {
+            if fm.fileExists(atPath: "\(c)/build_native_port.sh") || fm.fileExists(atPath: "\(c)/scripts/build_native_port.sh") {
+                return c
+            }
+        }
+        return "\(home)/kid-with-sword-remake"
+    }
+
+    private func findPythonBinary() -> String {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let candidates = [
+            "\(home)/nxnative/.venv/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            "/usr/bin/python3"
+        ]
+        for c in candidates {
+            if fm.fileExists(atPath: c) {
+                return c
+            }
+        }
+        return "/usr/bin/python3"
+    }
+
+    private func executeBuildPipeline() {
+        let fm = FileManager.default
+        let repo = findRepoDirectory()
+        let scriptPath = fm.fileExists(atPath: "\(repo)/build_native_port.sh") ? "\(repo)/build_native_port.sh" : "\(repo)/scripts/build_native_port.sh"
         
         guard fm.fileExists(atPath: scriptPath) else {
             DispatchQueue.main.async {
                 self.isBuilding = false
-                self.buildError = "Build script not found at \(scriptPath)."
+                self.buildError = "Build script not found in repo at \(repo)."
             }
             return
         }
@@ -193,7 +227,7 @@ class PatcherModel: ObservableObject {
         
         var env = ProcessInfo.processInfo.environment
         env["REPO"] = repo
-        env["PY"] = "\(home)/nxnative/.venv/bin/python3"
+        env["PY"] = findPythonBinary()
         env["GAMES_DIR"] = outputDirectory
         env["NUP"] = nupPath
         env["WORK"] = workDir
@@ -543,6 +577,9 @@ struct PatcherMainView: View {
     }
     
     private func loadGameIcon() -> NSImage {
+        if let res = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let img = NSImage(contentsOf: res) {
+            return img
+        }
         let appIconPath = "/Users/pranavkdupati/Documents/Switch 2 Games/Ocarina of Time.app/Contents/Resources/AppIcon.icns"
         if let img = NSImage(contentsOfFile: appIconPath) {
             return img
