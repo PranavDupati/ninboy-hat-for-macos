@@ -13,9 +13,10 @@ DM_FRAME_WG=1
 DM_NVN_ENC_THREAD=1
 
 # Memory & Swap Optimization (16 GB unified memory Mac)
+# Use Level 1: releases CPU_NO_ACCESS textures without purging recreated CPU-visible textures (prevents magenta/pink textures)
 DM_GUEST_FILE=1
 DM_GUEST_FILE_CHUNK=1G
-DM_TEX_RELEASE=2
+DM_TEX_RELEASE=1
 DM_TEX_RELEASE_METHOD=free
 DM_NVN_TEX_SOFT=1
 DM_NVN_TEX_SOFT_ARRAYS=0

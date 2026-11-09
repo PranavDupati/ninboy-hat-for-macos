@@ -253,12 +253,58 @@ package_app() {
         --env-file "$REPO/mac_env.txt" \
         -o "$APP" 2>&1 | tee -a "$LOG"
 
-    # Ensure macOS Game Mode is enabled in Info.plist
+    # Ensure macOS Game Mode and Controller support flags are enabled in Info.plist
     plutil -replace LSSupportsGameMode -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
+    plutil -replace GCSupportsGameMode -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
+    plutil -replace GCSupportsControllerUserInteraction -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
+    plutil -replace LSApplicationCategoryType -string "public.app-category.games" "$APP/Contents/Info.plist" 2>/dev/null || true
+    plutil -replace NSPrincipalClass -string "NSApplication" "$APP/Contents/Info.plist" 2>/dev/null || true
 
-    # Re-sign with entitlements
+    # Strip quarantine attributes to prevent Gatekeeper timeout/stalls
+    xattr -cr "$APP" 2>/dev/null || true
+
+    # Re-sign executable and bundle
+    codesign -f -s - "$APP/Contents/MacOS/nxnative" 2>/dev/null || true
     codesign -f -s - "$APP"
     echo "==> App packaged & signed: $APP" | tee -a "$LOG"
+
+    # Register into LaunchServices database
+    local LSREG="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    if [ -x "$LSREG" ]; then
+        "$LSREG" -f "$APP" 2>/dev/null || true
+    fi
+
+    # macOS Game Mode Integration: register app bookmark into LSIdentifiedGame
+    swift - "$APP" << 'EOF' 2>/dev/null || true
+import Foundation
+let args = CommandLine.arguments
+guard args.count > 1 else { exit(0) }
+let appPath = args[1]
+let bundleID = "org.nxnative.0400486024dec000"
+let lsPlistPath = ("~/Library/Preferences/com.apple.LaunchServices/com.apple.LaunchServices.plist" as NSString).expandingTildeInPath
+do {
+    let url = URL(fileURLWithPath: appPath)
+    let bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    let plistData = try Data(contentsOf: URL(fileURLWithPath: lsPlistPath))
+    if var dict = try PropertyListSerialization.propertyList(from: plistData, options: .mutableContainersAndLeaves, format: nil) as? [String: Any] {
+        var games = dict["LSIdentifiedGame"] as? [String: Any] ?? [:]
+        games[bundleID] = [bookmark, 3]
+        dict["LSIdentifiedGame"] = games
+        let outData = try PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0)
+        try outData.write(to: URL(fileURLWithPath: lsPlistPath))
+    }
+} catch {}
+EOF
+
+    # If the app is installed outside /Applications and ~/Applications, link it into ~/Applications for gamepolicyd detection
+    if [[ "$APP" != /Applications/* ]] && [[ "$APP" != "$HOME/Applications/"* ]]; then
+        mkdir -p "$HOME/Applications"
+        ln -sfn "$APP" "$HOME/Applications/Ocarina of Time.app" 2>/dev/null || true
+        if [ -x "$LSREG" ]; then
+            "$LSREG" -f "$HOME/Applications/Ocarina of Time.app" 2>/dev/null || true
+        fi
+        echo "==> Registered Game Mode link in $HOME/Applications/Ocarina of Time.app" | tee -a "$LOG"
+    fi
 
     # Sync RAM optimizations to Application Support to prevent stale user config overrides
     local NX_SUP="$HOME/Library/Application Support/nxnative/0400486024DEC000"

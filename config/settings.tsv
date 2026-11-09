@@ -23,7 +23,7 @@ DM_PRESENT_UPSCALE	choice	off=Standard,metalfx=MetalFX,fsr4=FSR 4 (Machine Learn
 DM_UPSCALER	choice	game=Game's own,metalfx=MetalFX,fsr4=FSR 4 (Native INT8 ML)	metalfx	DM_GAME_UPSCALER_N!=0	Game	Game's upscaler	Replaces internal game upscaler with MetalFX or AMD FSR 4 INT8 neural model.
 DM_FRAME_GEN	choice	off=Off,metalfx=MetalFX Frame Interpolation,fsr4=FSR 4 Frame Generation	off	platform:mac	Game	Frame generation	Generates intermediate frames between rendered frames using MetalFX / FSR 4 Frame Generation.
 DM_LANG	choice	languages	build:DM_LANG	languages>1	Game	Game language		level=basic
-DM_FULLSCREEN	choice	0=Window,1=Fullscreen	0	platform:mac	Game	Display mode		level=basic
+DM_FULLSCREEN	choice	1=Fullscreen,0=Window	1	platform:mac	Game	Display mode		level=basic
 DM_PICTURE_FIT	choice	fit=Fit,fill=Fill	fit	platform:ios	Game	Picture	Fill crops the game's 16:9 picture to cover the screen. Health bars, subtitles or maps near the edges can be cut off. A full-screen picture without cropping needs a patch for each game.
 DM_SHOW_FPS	toggle	-	1	always	Game	Frame-rate counter
 DM_TOUCH_HAPTICS	toggle	-	1	platform:ios	Controls	Touch feedback

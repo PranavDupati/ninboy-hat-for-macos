@@ -41,7 +41,7 @@ class PatcherModel: ObservableObject {
     @Published var ramOptimization: Bool = true
     @Published var lKeyCrashFix: Bool = true
     @Published var zeldasLullabyFix: Bool = true
-    @Published var hyruleTextureFix: Bool = false
+    @Published var hyruleTextureFix: Bool = true
     @Published var dispatchOverlap: Bool = true
     
     // Execution & Progress State
@@ -135,7 +135,9 @@ class PatcherModel: ObservableObject {
         envTxt += "DM_FPS_HOLD=off\n"
         envTxt += "DM_FRAME_WG=1\n"
         envTxt += "DM_NVN_ENC_THREAD=1\n"
-        envTxt += "DM_TEX_RELEASE=\(hyruleTextureFix ? "1" : "2")\n"
+        envTxt += "DM_TEX_RELEASE=1\n"
+        envTxt += "DM_FULLSCREEN=\(displayMode)\n"
+        envTxt += "DM_FOCUS_KEEP=1\n"
         envTxt += "DM_THERMAL_CAP=0\n"
         envTxt += "DM_ALIAS_SIZE=0x200000000\n"
         envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
@@ -153,17 +155,77 @@ class PatcherModel: ObservableObject {
             try? envTxt.write(toFile: bundleEnv, atomically: true, encoding: .utf8)
 
             let plistPath = "\(builtAppPath)/Contents/Info.plist"
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
-            p.arguments = ["-replace", "LSSupportsGameMode", "-bool", "true", plistPath]
-            try? p.run()
-            p.waitUntilExit()
+            let keys: [(String, String, String)] = [
+                ("LSSupportsGameMode", "-bool", "true"),
+                ("GCSupportsGameMode", "-bool", "true"),
+                ("GCSupportsControllerUserInteraction", "-bool", "true"),
+                ("LSApplicationCategoryType", "-string", "public.app-category.games"),
+                ("NSPrincipalClass", "-string", "NSApplication")
+            ]
+            for (key, type, val) in keys {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+                p.arguments = ["-replace", key, type, val, plistPath]
+                try? p.run()
+                p.waitUntilExit()
+            }
+
+            let pXattr = Process()
+            pXattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+            pXattr.arguments = ["-cr", builtAppPath]
+            try? pXattr.run()
+            pXattr.waitUntilExit()
+
+            let pSignExe = Process()
+            pSignExe.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            pSignExe.arguments = ["-f", "-s", "-", "\(builtAppPath)/Contents/MacOS/nxnative"]
+            try? pSignExe.run()
+            pSignExe.waitUntilExit()
 
             let pSign = Process()
             pSign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
             pSign.arguments = ["-f", "-s", "-", builtAppPath]
             try? pSign.run()
             pSign.waitUntilExit()
+
+            let lsreg = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+            if fm.fileExists(atPath: lsreg) {
+                let pReg = Process()
+                pReg.executableURL = URL(fileURLWithPath: lsreg)
+                pReg.arguments = ["-f", builtAppPath]
+                try? pReg.run()
+                pReg.waitUntilExit()
+            }
+
+            // Register LSIdentifiedGame bookmark for macOS Game Mode policy
+            let bundleID = "org.nxnative.0400486024dec000"
+            let lsPlistPath = ("~/Library/Preferences/com.apple.LaunchServices/com.apple.LaunchServices.plist" as NSString).expandingTildeInPath
+            if let bookmark = try? URL(fileURLWithPath: builtAppPath).bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil),
+               let plistData = try? Data(contentsOf: URL(fileURLWithPath: lsPlistPath)),
+               var dict = (try? PropertyListSerialization.propertyList(from: plistData, options: .mutableContainersAndLeaves, format: nil)) as? [String: Any] {
+                var games = dict["LSIdentifiedGame"] as? [String: Any] ?? [:]
+                games[bundleID] = [bookmark, 3]
+                dict["LSIdentifiedGame"] = games
+                if let outData = try? PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0) {
+                    try? outData.write(to: URL(fileURLWithPath: lsPlistPath))
+                }
+            }
+
+            // Ensure app is recognized by gamepolicyd in ~/Applications if installed elsewhere
+            if !builtAppPath.hasPrefix("/Applications/") && !builtAppPath.hasPrefix("\(home)/Applications/") {
+                let userApps = "\(home)/Applications"
+                try? fm.createDirectory(atPath: userApps, withIntermediateDirectories: true)
+                let linkPath = "\(userApps)/Ocarina of Time.app"
+                try? fm.removeItem(atPath: linkPath)
+                try? fm.createSymbolicLink(atPath: linkPath, withDestinationPath: builtAppPath)
+                if fm.fileExists(atPath: lsreg) {
+                    let pReg2 = Process()
+                    pReg2.executableURL = URL(fileURLWithPath: lsreg)
+                    pReg2.arguments = ["-f", linkPath]
+                    try? pReg2.run()
+                    pReg2.waitUntilExit()
+                }
+            }
         }
     }
     
@@ -328,6 +390,7 @@ class PatcherModel: ObservableObject {
                     self.buildProgress = 1.0
                     self.currentPhase = "Done! Game built successfully."
                     self.checkBuiltApp(in: self.outputDirectory)
+                    self.syncSettings()
                     if self.autoLaunchOnComplete {
                         self.launchGame()
                     }
