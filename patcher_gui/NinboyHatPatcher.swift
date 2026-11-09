@@ -41,7 +41,7 @@ class PatcherModel: ObservableObject {
     @Published var ramOptimization: Bool = true
     @Published var lKeyCrashFix: Bool = true
     @Published var zeldasLullabyFix: Bool = true
-    @Published var hyruleTextureFix: Bool = true
+    @Published var hyruleTextureFix: Bool = false
     @Published var dispatchOverlap: Bool = true
     
     // Execution & Progress State
@@ -151,6 +151,19 @@ class PatcherModel: ObservableObject {
         if !builtAppPath.isEmpty && fm.fileExists(atPath: builtAppPath) {
             let bundleEnv = "\(builtAppPath)/Contents/Resources/dm/env.txt"
             try? envTxt.write(toFile: bundleEnv, atomically: true, encoding: .utf8)
+
+            let plistPath = "\(builtAppPath)/Contents/Info.plist"
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+            p.arguments = ["-replace", "LSSupportsGameMode", "-bool", "true", plistPath]
+            try? p.run()
+            p.waitUntilExit()
+
+            let pSign = Process()
+            pSign.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+            pSign.arguments = ["-f", "-s", "-", builtAppPath]
+            try? pSign.run()
+            pSign.waitUntilExit()
         }
     }
     

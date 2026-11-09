@@ -197,6 +197,9 @@ package_app() {
         --env-file "$REPO/mac_env.txt" \
         -o "$APP" 2>&1 | tee -a "$LOG"
 
+    # Ensure macOS Game Mode is enabled in Info.plist
+    plutil -replace LSSupportsGameMode -bool true "$APP/Contents/Info.plist" 2>/dev/null || true
+
     # Re-sign with entitlements
     codesign -f -s - "$APP"
     echo "==> App packaged & signed: $APP" | tee -a "$LOG"
