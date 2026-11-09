@@ -38,6 +38,7 @@ class PatcherModel: ObservableObject {
     
     // Advanced Stability & Patches
     @Published var includeFullPipelineArchive: Bool = true
+    @Published var ramOptimization: Bool = true
     @Published var lKeyCrashFix: Bool = true
     @Published var zeldasLullabyFix: Bool = true
     @Published var hyruleTextureFix: Bool = true
@@ -50,8 +51,6 @@ class PatcherModel: ObservableObject {
     @Published var logLines: [String] = []
     @Published var buildError: String? = nil
     @Published var autoLaunchOnComplete: Bool = true
-    @Published var doctorReport: String? = nil
-    @Published var isRunningDoctor: Bool = false
     
     private var process: Process?
     
@@ -109,14 +108,53 @@ class PatcherModel: ObservableObject {
         upscaler = "fsr4"
         frameGen = "metalfx"
         includeFullPipelineArchive = true
+        ramOptimization = true
         lKeyCrashFix = true
         zeldasLullabyFix = true
         hyruleTextureFix = true
         dispatchOverlap = true
     }
     
+    func syncSettings() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        let repo = "\(home)/kid-with-sword-remake"
+        
+        var envTxt = "# Ninboy Hat Engine Environment (RAM & Swap Optimized for 16 GB unified memory)\n"
+        if ramOptimization {
+            envTxt += "DM_GUEST_FILE=1\n"
+            envTxt += "DM_GUEST_FILE_CHUNK=1G\n"
+            envTxt += "DM_PSO_PREPARE=0\n"
+            envTxt += "DM_TEX_RELEASE_METHOD=free\n"
+            envTxt += "DM_NVN_TEX_SOFT=1\n"
+            envTxt += "DM_NVN_TEX_SOFT_ARRAYS=0\n"
+            envTxt += "DM_NVN_TEX_SOFT_LEVELS=1\n"
+        } else {
+            envTxt += "DM_PSO_PREPARE=1\n"
+        }
+        envTxt += "DM_TEX_RELEASE=\(hyruleTextureFix ? "1" : "2")\n"
+        envTxt += "DM_PRESENT_UPSCALE=\(upscaler)\n"
+        envTxt += "DM_THERMAL_CAP=0\n"
+        envTxt += "DM_ALIAS_SIZE=0x200000000\n"
+        envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
+        envTxt += "DM_NVN_PREDICT=1\n"
+        envTxt += "DM_PSO_WAITLOG=0\n"
+        
+        try? envTxt.write(toFile: "\(repo)/mac_env.txt", atomically: true, encoding: .utf8)
+        
+        let appSupportDir = "\(home)/Library/Application Support/nxnative/0400486024DEC000"
+        try? fm.createDirectory(atPath: appSupportDir, withIntermediateDirectories: true)
+        try? envTxt.write(toFile: "\(appSupportDir)/env.txt", atomically: true, encoding: .utf8)
+        
+        if !builtAppPath.isEmpty && fm.fileExists(atPath: builtAppPath) {
+            let bundleEnv = "\(builtAppPath)/Contents/Resources/dm/env.txt"
+            try? envTxt.write(toFile: bundleEnv, atomically: true, encoding: .utf8)
+        }
+    }
+    
     func launchGame() {
         guard !builtAppPath.isEmpty, FileManager.default.fileExists(atPath: builtAppPath) else { return }
+        syncSettings()
         let url = URL(fileURLWithPath: builtAppPath)
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
     }
@@ -125,41 +163,6 @@ class PatcherModel: ObservableObject {
         guard !builtAppPath.isEmpty else { return }
         let url = URL(fileURLWithPath: builtAppPath)
         NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-    
-    func runDoctor() {
-        isRunningDoctor = true
-        doctorReport = nil
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            let repo = self.findRepoDirectory()
-            let scriptPath = FileManager.default.fileExists(atPath: "\(repo)/build_native_port.sh") ? "\(repo)/build_native_port.sh" : "\(repo)/scripts/build_native_port.sh"
-            
-            guard FileManager.default.fileExists(atPath: scriptPath) else {
-                DispatchQueue.main.async {
-                    self.isRunningDoctor = false
-                    self.doctorReport = "Build script not found at \(scriptPath)."
-                }
-                return
-            }
-            
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/bash")
-            proc.arguments = [scriptPath, "--doctor"]
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = pipe
-            try? proc.run()
-            proc.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? "Diagnostics finished."
-            
-            DispatchQueue.main.async {
-                self.isRunningDoctor = false
-                self.doctorReport = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.logLines.append(contentsOf: output.components(separatedBy: .newlines).filter { !$0.isEmpty })
-            }
-        }
     }
     
     func startBuild() {
@@ -192,64 +195,22 @@ class PatcherModel: ObservableObject {
         }
     }
     
-    private func findRepoDirectory() -> String {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "\(home)/kid-with-sword-remake",
-            "\(home)/ninboy-hat-for-macos",
-            "\(home)/Documents/Switch 2 Games/ninboy-hat-for-macos",
-            Bundle.main.resourcePath ?? "",
-            Bundle.main.bundleURL.deletingLastPathComponent().path
-        ]
-        for c in candidates where !c.isEmpty {
-            if fm.fileExists(atPath: "\(c)/build_native_port.sh") || fm.fileExists(atPath: "\(c)/scripts/build_native_port.sh") {
-                return c
-            }
-        }
-        return "\(home)/kid-with-sword-remake"
-    }
-
-    private func findPythonBinary() -> String {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        let candidates = [
-            "\(home)/nxnative/.venv/bin/python3",
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3"
-        ]
-        for c in candidates {
-            if fm.fileExists(atPath: c) {
-                return c
-            }
-        }
-        return "/usr/bin/python3"
-    }
-
     private func executeBuildPipeline() {
         let fm = FileManager.default
-        let repo = findRepoDirectory()
-        let scriptPath = fm.fileExists(atPath: "\(repo)/build_native_port.sh") ? "\(repo)/build_native_port.sh" : "\(repo)/scripts/build_native_port.sh"
+        let home = fm.homeDirectoryForCurrentUser.path
+        let repo = "\(home)/kid-with-sword-remake"
+        let scriptPath = "\(repo)/build_native_port.sh"
         
         guard fm.fileExists(atPath: scriptPath) else {
             DispatchQueue.main.async {
                 self.isBuilding = false
-                self.buildError = "Build script not found in repo at \(repo)."
+                self.buildError = "Build script not found at \(scriptPath)."
             }
             return
         }
         
-        // Update mac_env.txt with chosen options
-        var envTxt = "# Ninboy Hat Engine Environment\n"
-        envTxt += "DM_THERMAL_CAP=0\n"
-        envTxt += "DM_ALIAS_SIZE=0x200000000\n"
-        envTxt += "DM_TEX_RELEASE=\(hyruleTextureFix ? "1" : "2")\n"
-        envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
-        envTxt += "DM_PSO_PREPARE=1\n"
-        envTxt += "DM_NVN_PREDICT=1\n"
-        envTxt += "DM_PSO_WAITLOG=1\n"
-        try? envTxt.write(toFile: "\(repo)/mac_env.txt", atomically: true, encoding: .utf8)
+        // Update mac_env.txt and nxnative Application Support with chosen options
+        syncSettings()
         
         // Execute build_native_port.sh
         let proc = Process()
@@ -264,7 +225,7 @@ class PatcherModel: ObservableObject {
         
         var env = ProcessInfo.processInfo.environment
         env["REPO"] = repo
-        env["PY"] = findPythonBinary()
+        env["PY"] = "\(home)/nxnative/.venv/bin/python3"
         env["GAMES_DIR"] = outputDirectory
         env["NUP"] = nupPath
         env["WORK"] = workDir
@@ -473,6 +434,7 @@ struct PatcherMainView: View {
                 Section {
                     DisclosureGroup("Advanced settings & crash fixes", isExpanded: $showAdvanced) {
                         Toggle("Metal 4 Offline Pipeline Archive (3.2 GB, 0% stutter)", isOn: $model.includeFullPipelineArchive)
+                        Toggle("RAM & Swap Optimization (16 GB Unified Memory)", isOn: $model.ramOptimization)
                         Toggle("L-Key Vibration Crash Fix (nn::hid stubs)", isOn: $model.lKeyCrashFix)
                         Toggle("Zelda's Lullaby Crash Fix (NvPkg selector forwarding)", isOn: $model.zeldasLullabyFix)
                         Toggle("Hyrule Castle & Village Missing Textures Fix", isOn: $model.hyruleTextureFix)
@@ -485,34 +447,6 @@ struct PatcherMainView: View {
                                 .foregroundStyle(.secondary)
                             Button("Choose...") { chooseOutputDir() }
                         }
-                        
-                        Divider().padding(.vertical, 4)
-                        
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("System Preflight Diagnostics")
-                                    .font(.subheadline.weight(.medium))
-                                Text("Verify Apple Silicon, Metal toolchain, and Python tools")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button(model.isRunningDoctor ? "Checking..." : "Run Doctor") {
-                                model.runDoctor()
-                            }
-                            .disabled(model.isRunningDoctor)
-                        }
-                        
-                        if let rep = model.doctorReport {
-                            Text(rep)
-                                .font(.system(size: 10, design: .monospaced))
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        
-                        Divider().padding(.vertical, 4)
                         
                         Button("Reset to tested defaults") {
                             model.resetToDefaults()
@@ -642,9 +576,6 @@ struct PatcherMainView: View {
     }
     
     private func loadGameIcon() -> NSImage {
-        if let res = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"), let img = NSImage(contentsOf: res) {
-            return img
-        }
         let appIconPath = "/Users/pranavkdupati/Documents/Switch 2 Games/Ocarina of Time.app/Contents/Resources/AppIcon.icns"
         if let img = NSImage(contentsOfFile: appIconPath) {
             return img
