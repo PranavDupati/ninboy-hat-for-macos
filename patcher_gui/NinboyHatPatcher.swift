@@ -344,10 +344,227 @@ class PatcherModel: ObservableObject {
     }
 }
 
+// MARK: - Auto-Updater & GitHub Release Manager
+
+class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
+    @Published var isChecking: Bool = false
+    @Published var updateAvailable: Bool = false
+    @Published var latestVersion: String = ""
+    @Published var releaseNotes: String = ""
+    @Published var releaseUrl: URL? = nil
+    @Published var downloadUrl: URL? = nil
+    
+    @Published var isDownloading: Bool = false
+    @Published var downloadProgress: Double = 0.0
+    @Published var updateStatus: String = ""
+    @Published var updateError: String? = nil
+    
+    @Published var showUpdateSheet: Bool = false
+    @Published var upToDateMessage: String? = nil
+    
+    var currentVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1"
+    }
+    
+    private var downloadTask: URLSessionDownloadTask?
+    
+    func checkForUpdates(userInitiated: Bool = false) {
+        guard !isChecking, !isDownloading else { return }
+        isChecking = true
+        updateError = nil
+        
+        guard let url = URL(string: "https://api.github.com/repos/PranavDupati/ninboy-hat-for-macos/releases/latest") else {
+            isChecking = false
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+        request.setValue("NinboyHatPatcher/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 10
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isChecking = false
+                
+                if let error = error {
+                    if userInitiated {
+                        self.updateError = "Unable to check for updates: \(error.localizedDescription)"
+                    }
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tag = json["tag_name"] as? String else {
+                    if userInitiated {
+                        self.updateError = "Could not parse latest release from GitHub."
+                    }
+                    return
+                }
+                
+                let cleanTag = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+                self.latestVersion = cleanTag
+                self.releaseNotes = json["body"] as? String ?? "No release notes provided."
+                if let htmlStr = json["html_url"] as? String, let u = URL(string: htmlStr) {
+                    self.releaseUrl = u
+                }
+                
+                // Find ZIP asset
+                if let assets = json["assets"] as? [[String: Any]] {
+                    for asset in assets {
+                        if let name = asset["name"] as? String,
+                           let dlStr = asset["browser_download_url"] as? String,
+                           let dlUrl = URL(string: dlStr),
+                           name.hasSuffix(".zip") {
+                            self.downloadUrl = dlUrl
+                            break
+                        }
+                    }
+                }
+                
+                if self.isVersion(cleanTag, greaterThan: self.currentVersion) {
+                    self.updateAvailable = true
+                    self.showUpdateSheet = true
+                } else {
+                    self.updateAvailable = false
+                    if userInitiated {
+                        self.upToDateMessage = "Ninboy Hat Patcher is up to date (v\(self.currentVersion))."
+                    }
+                }
+            }
+        }.resume()
+    }
+    
+    func downloadAndInstallUpdate() {
+        guard let url = downloadUrl, !isDownloading else {
+            if let relUrl = releaseUrl {
+                NSWorkspace.shared.open(relUrl)
+            }
+            return
+        }
+        
+        isDownloading = true
+        downloadProgress = 0.0
+        updateStatus = "Downloading v\(latestVersion)..."
+        updateError = nil
+        
+        let config = URLSessionConfiguration.default
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        let task = session.downloadTask(with: url)
+        self.downloadTask = task
+        task.resume()
+    }
+    
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
+        if totalBytesExpectedToWrite > 0 {
+            let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+            let mbWritten = Double(totalBytesWritten) / 1_048_576.0
+            let mbTotal = Double(totalBytesExpectedToWrite) / 1_048_576.0
+            DispatchQueue.main.async {
+                self.downloadProgress = progress
+                self.updateStatus = String(format: "Downloading: %.1f MB / %.1f MB (%.0f%%)", mbWritten, mbTotal, progress * 100)
+            }
+        }
+    }
+    
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        DispatchQueue.main.async {
+            self.updateStatus = "Extracting & preparing update..."
+        }
+        
+        let fm = FileManager.default
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ninboy_patcher_update_\(UUID().uuidString)")
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        
+        let zipDest = tempDir.appendingPathComponent("update.zip")
+        try? fm.moveItem(at: location, to: zipDest)
+        
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", zipDest.path, tempDir.path]
+        try? unzip.run()
+        unzip.waitUntilExit()
+        
+        let extractedItems = (try? fm.contentsOfDirectory(atPath: tempDir.path)) ?? []
+        var newAppPath: String? = nil
+        for item in extractedItems {
+            if item.hasSuffix(".app") {
+                newAppPath = tempDir.appendingPathComponent(item).path
+                break
+            }
+        }
+        
+        guard let newApp = newAppPath, fm.fileExists(atPath: newApp) else {
+            DispatchQueue.main.async {
+                self.isDownloading = false
+                self.updateError = "Failed to extract update package."
+            }
+            return
+        }
+        
+        let currentApp = Bundle.main.bundlePath
+        let scriptPath = tempDir.appendingPathComponent("install.sh").path
+        let script = """
+        #!/bin/bash
+        sleep 1
+        rm -rf "\(currentApp)"
+        cp -R "\(newApp)" "\(currentApp)"
+        xattr -dr com.apple.quarantine "\(currentApp)" 2>/dev/null || true
+        open "\(currentApp)"
+        rm -rf "\(tempDir.path)"
+        """
+        
+        try? script.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+        
+        let chmod = Process()
+        chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        chmod.arguments = ["+x", scriptPath]
+        try? chmod.run()
+        chmod.waitUntilExit()
+        
+        DispatchQueue.main.async {
+            self.updateStatus = "Relaunching updated version..."
+            let launcher = Process()
+            launcher.executableURL = URL(fileURLWithPath: "/bin/bash")
+            launcher.arguments = [scriptPath]
+            try? launcher.run()
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                NSApplication.shared.terminate(nil)
+            }
+        }
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error = error {
+            DispatchQueue.main.async {
+                self.isDownloading = false
+                self.updateError = "Download failed: \(error.localizedDescription)"
+            }
+        }
+    }
+    
+    private func isVersion(_ v1: String, greaterThan v2: String) -> Bool {
+        let parts1 = v1.components(separatedBy: ".").compactMap { Int($0) }
+        let parts2 = v2.components(separatedBy: ".").compactMap { Int($0) }
+        let maxCount = max(parts1.count, parts2.count)
+        for i in 0..<maxCount {
+            let p1 = i < parts1.count ? parts1[i] : 0
+            let p2 = i < parts2.count ? parts2[i] : 0
+            if p1 > p2 { return true }
+            if p1 < p2 { return false }
+        }
+        return false
+    }
+}
+
 // MARK: - Native SwiftUI Interface (Matching Game Launcher Window)
 
 struct PatcherMainView: View {
     @ObservedObject var model: PatcherModel
+    @StateObject private var updater = UpdateManager()
     @State private var showAdvanced: Bool = false
     @State private var showLog: Bool = false
     
@@ -369,11 +586,45 @@ struct PatcherMainView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("The Legend of Zelda: Ocarina of Time")
                         .font(.title2.weight(.semibold))
-                    Text("Ninboy Hat macOS Port Builder • Version 1.0")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("Ninboy Hat macOS Port Builder • v\(updater.currentVersion)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        
+                        if updater.updateAvailable {
+                            Button {
+                                updater.showUpdateSheet = true
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "arrow.down.circle.fill")
+                                    Text("v\(updater.latestVersion) Available")
+                                }
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.blue))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
                 Spacer()
+                
+                Button {
+                    updater.checkForUpdates(userInitiated: true)
+                } label: {
+                    if updater.isChecking {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .help("Check for Updates")
             }
             .padding([.horizontal, .top], 20)
             .padding(.bottom, 12)
@@ -607,6 +858,18 @@ struct PatcherMainView: View {
             .padding(20)
         }
         .frame(minWidth: 540, idealWidth: 580, minHeight: 680, idealHeight: 740)
+        .sheet(isPresented: $updater.showUpdateSheet) {
+            UpdateSheetView(updater: updater)
+        }
+        .alert(updater.upToDateMessage ?? "", isPresented: Binding(
+            get: { updater.upToDateMessage != nil },
+            set: { if !$0 { updater.upToDateMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { updater.upToDateMessage = nil }
+        }
+        .onAppear {
+            updater.checkForUpdates(userInitiated: false)
+        }
     }
     
     private func chooseNupFile() {
@@ -650,6 +913,95 @@ struct PatcherMainView: View {
             return img
         }
         return NSApp.applicationIconImage
+    }
+}
+
+// MARK: - Auto-Updater Sheet View
+
+struct UpdateSheetView: View {
+    @ObservedObject var updater: UpdateManager
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.blue.opacity(0.12))
+                        .frame(width: 48, height: 48)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 24))
+                        .foregroundStyle(.blue)
+                }
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Update Available")
+                        .font(.headline)
+                    Text("Version \(updater.latestVersion) is now available (you have v\(updater.currentVersion)).")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Release Notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ScrollView {
+                    Text(updater.releaseNotes)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                .frame(height: 150)
+                .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            
+            if updater.isDownloading {
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: updater.downloadProgress, total: 1.0)
+                    Text(updater.updateStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            
+            if let err = updater.updateError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+            
+            HStack(spacing: 10) {
+                if let relUrl = updater.releaseUrl {
+                    Button("View on GitHub") {
+                        NSWorkspace.shared.open(relUrl)
+                    }
+                }
+                
+                Spacer()
+                
+                Button("Later") {
+                    dismiss()
+                }
+                .disabled(updater.isDownloading)
+                
+                Button(updater.isDownloading ? "Updating..." : "Download & Install") {
+                    updater.downloadAndInstallUpdate()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(updater.isDownloading)
+            }
+        }
+        .padding(20)
+        .frame(width: 480, height: 350)
     }
 }
 

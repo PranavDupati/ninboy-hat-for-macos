@@ -19,39 +19,84 @@ LOG="${LOG:-$HOME/Downloads/oot-native-build.log}"
 
 # Find or auto-provision the base translation engine
 find_or_setup_engine() {
+    local FOUND=0
     if [ -n "$REPO" ] && [ -f "$REPO/scripts/build_ipa_from_nsp.py" ]; then
-        return 0
+        FOUND=1
     fi
 
-    # Check known local candidates
-    for candidate in \
-        "$BUNDLE_RESOURCES" \
-        "$SUPPORT_DIR/engine" \
-        "$HOME/kid-with-sword-remake" \
-        "$HOME/ninboy-hat-for-macos" \
-        "$(cd "$(dirname "$0")/.." && pwd)" \
-        "$(pwd)"; do
-        if [ -n "$candidate" ] && [ -f "$candidate/scripts/build_ipa_from_nsp.py" ]; then
-            REPO="$candidate"
-            echo "  ✓ Base engine found at $REPO"
-            return 0
+    if [ "$FOUND" -eq 0 ]; then
+        # Check known local candidates
+        for candidate in \
+            "$BUNDLE_RESOURCES" \
+            "$SUPPORT_DIR/engine" \
+            "$HOME/kid-with-sword-remake" \
+            "$HOME/ninboy-hat-for-macos" \
+            "$(cd "$(dirname "$0")/.." && pwd)" \
+            "$(pwd)"; do
+            if [ -n "$candidate" ] && [ -f "$candidate/scripts/build_ipa_from_nsp.py" ]; then
+                REPO="$candidate"
+                echo "  ✓ Base engine found at $REPO"
+                FOUND=1
+                break
+            fi
+        done
+    fi
+
+    if [ "$FOUND" -eq 0 ]; then
+        # Provision base engine automatically into Application Support
+        echo "==> Base engine not found locally. Downloading base translation engine from GitHub..."
+        mkdir -p "$SUPPORT_DIR"
+        if ! command -v git >/dev/null 2>&1; then
+            echo "✗ Error: git is required to download the open-source translation engine. Please run 'xcode-select --install'."
+            exit 1
         fi
-    done
 
-    # Provision base engine automatically into Application Support
-    echo "==> Base engine not found locally. Downloading base translation engine from GitHub..."
-    mkdir -p "$SUPPORT_DIR"
-    if ! command -v git >/dev/null 2>&1; then
-        echo "✗ Error: git is required to download the open-source translation engine. Please run 'xcode-select --install'."
-        exit 1
+        if [ ! -d "$SUPPORT_DIR/engine/.git" ]; then
+            rm -rf "$SUPPORT_DIR/engine"
+            git clone --depth 1 https://github.com/cheemu21/kid-with-sword-remake.git "$SUPPORT_DIR/engine"
+        fi
+        REPO="$SUPPORT_DIR/engine"
+        echo "  ✓ Base engine provisioned at $REPO"
     fi
 
-    if [ ! -d "$SUPPORT_DIR/engine/.git" ]; then
-        rm -rf "$SUPPORT_DIR/engine"
-        git clone --depth 1 https://github.com/cheemu21/kid-with-sword-remake.git "$SUPPORT_DIR/engine"
+    # Sync bundled configs, shader lists, mods, and patches into the engine
+    local RES="${BUNDLE_RESOURCES:-$(cd "$(dirname "$0")/.." && pwd)}"
+    if [ ! -d "$RES/config" ] && [ -d "$(dirname "$0")/config" ]; then
+        RES="$(dirname "$0")"
     fi
-    REPO="$SUPPORT_DIR/engine"
-    echo "  ✓ Base engine provisioned at $REPO"
+
+    local GAME_DIR="$REPO/dm/games/0400486024DEC000"
+    mkdir -p "$GAME_DIR"
+
+    if [ -d "$RES/config" ]; then
+        echo "  ✓ Syncing game configs & shader manifests from bundle..."
+        cp -f "$RES/config/game.tsv" "$GAME_DIR/game.tsv" 2>/dev/null || true
+        cp -f "$RES/config/settings.tsv" "$REPO/dm/games/settings.tsv" 2>/dev/null || true
+        cp -f "$RES/config/mac_env.txt" "$REPO/mac_env.txt" 2>/dev/null || true
+        if [ -f "$RES/config/shader_seen.tsv" ]; then
+            cp -f "$RES/config/shader_seen.tsv" "$GAME_DIR/shader_seen.tsv"
+        fi
+        if [ -f "$RES/config/shader_seen_full.tsv" ]; then
+            cp -f "$RES/config/shader_seen_full.tsv" "$GAME_DIR/shader_seen_full.tsv"
+            if [ ! -f "$GAME_DIR/shader_seen.tsv" ]; then
+                cp -f "$RES/config/shader_seen_full.tsv" "$GAME_DIR/shader_seen.tsv"
+            fi
+        fi
+    fi
+
+    if [ -d "$RES/romfs_mods" ]; then
+        echo "  ✓ Syncing RomFS keyboard and prompt assets..."
+        cp -f "$RES/romfs_mods/"* "$GAME_DIR/" 2>/dev/null || true
+    fi
+
+    if [ -d "$RES/tools" ]; then
+        cp -f "$RES/tools/"* "$REPO/dm/tools/" 2>/dev/null || true
+    fi
+
+    # Apply Ninboy Hat engine patch if git repo and clean
+    if [ -f "$RES/patches/ninboy-hat-macos.patch" ] && [ -d "$REPO/.git" ]; then
+        (cd "$REPO" && git apply --check "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null && git apply "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || true)
+    fi
 }
 
 # Discover or provision Python environment
@@ -165,11 +210,18 @@ EOF
 
 build_base() {
     echo "==> [1/3] Base Build & Shader Translation" | tee -a "$LOG"
+    local SEEN_FLAG=""
+    if [ -f "$REPO/dm/games/0400486024DEC000/shader_seen.tsv" ]; then
+        SEEN_FLAG="--seen-shaders"
+        echo "  ✓ Using targeted shader list (shader_seen.tsv)" | tee -a "$LOG"
+    else
+        echo "  ! shader_seen.tsv not found; translating full shader catalog" | tee -a "$LOG"
+    fi
     "$PY" "$REPO/scripts/build_ipa_from_nsp.py" "$NUP" \
         --platform mac \
         --work-dir "$WORK" \
         --keep-extracted \
-        --seen-shaders \
+        $SEEN_FLAG \
         --allow-damaged \
         --allow-other-metal \
         --env-file "$REPO/mac_env.txt" 2>&1 | tee -a "$LOG"
@@ -187,11 +239,15 @@ package_app() {
     echo "==> [3/3] Packaging Standalone macOS App Bundle & Pipeline Archive" | tee -a "$LOG"
     find_or_setup_engine
     find_or_setup_python
+    local SEEN_FLAG=""
+    if [ -f "$REPO/dm/games/0400486024DEC000/shader_seen.tsv" ]; then
+        SEEN_FLAG="--seen-shaders"
+    fi
     "$PY" "$REPO/scripts/build_ipa_from_nsp.py" "$NUP" \
         --platform mac-app \
         --work-dir "$WORK" \
         --keep-extracted \
-        --seen-shaders \
+        $SEEN_FLAG \
         --allow-damaged \
         --allow-other-metal \
         --env-file "$REPO/mac_env.txt" \
