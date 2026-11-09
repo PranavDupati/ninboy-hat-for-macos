@@ -9,7 +9,7 @@ Native Apple Silicon (ARM64 / Metal 4) compilation enhancements, crash fixes, ke
 
 ## Overview
 
-*Ninboy Hat for macOS* is a collection of enhancements, stability patches, and graphics/input overhauls built on top of the native Switch 2 AArch64 translation framework. By executing directly on Apple Silicon's ARM64 CPU and harnessing Apple's **Metal 4** graphics API, this project delivers fluid 60 FPS / unlocked gameplay, crisp high-resolution rendering, intuitive PC keyboard & mouse controls, and rock-solid stability.
+*NinBoy Hat for macOS* is a collection of enhancements, stability patches, and graphics/input overhauls built on top of the native Switch 2 AArch64 translation framework. By executing directly on Apple Silicon's ARM64 CPU and harnessing Apple's **Metal 4** graphics API, this project delivers fluid 60 FPS / unlocked gameplay, crisp high-resolution rendering, intuitive PC keyboard & mouse controls, and rock-solid stability.
 
 ---
 
