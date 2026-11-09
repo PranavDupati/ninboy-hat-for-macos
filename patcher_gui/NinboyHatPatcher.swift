@@ -333,6 +333,24 @@ class PatcherModel: ObservableObject {
         proc.arguments = [finalScript, action]
         
         var env = ProcessInfo.processInfo.environment
+        let standardPaths = [
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "\(home)/.cargo/bin",
+            "\(home)/.local/bin",
+            "\(home)/.pyenv/shims",
+            "/Library/Frameworks/Python.framework/Versions/Current/bin",
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin",
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin"
+        ]
+        let currentPath = env["PATH"] ?? ""
+        env["PATH"] = (standardPaths + [currentPath]).joined(separator: ":")
+        
         env["REPO"] = repo
         env["SUPPORT_DIR"] = supportDir
         env["GAMES_DIR"] = outputDirectory
@@ -342,10 +360,58 @@ class PatcherModel: ObservableObject {
         if let res = Bundle.main.resourcePath {
             env["BUNDLE_RESOURCES"] = res
         }
-        if fm.fileExists(atPath: "\(supportDir)/venv/bin/python3") {
-            env["PY"] = "\(supportDir)/venv/bin/python3"
-        } else if fm.fileExists(atPath: "\(home)/nxnative/.venv/bin/python3") {
-            env["PY"] = "\(home)/nxnative/.venv/bin/python3"
+        
+        // Helper to verify a python binary is >= 3.12
+        func isPython312(_ path: String) -> Bool {
+            guard fm.isExecutableFile(atPath: path) else { return false }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: path)
+            p.arguments = ["-c", "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)"]
+            try? p.run()
+            p.waitUntilExit()
+            return p.terminationStatus == 0
+        }
+        
+        let existingVenv = "\(supportDir)/venv/bin/python3"
+        if fm.fileExists(atPath: existingVenv) {
+            if isPython312(existingVenv) {
+                env["PY"] = existingVenv
+            } else {
+                appendLog("! Found outdated Python environment at \(supportDir)/venv. Removing to rebuild with Python 3.12+...")
+                try? fm.removeItem(atPath: "\(supportDir)/venv")
+            }
+        }
+        
+        if env["PY"] == nil {
+            let nxVenv = "\(home)/nxnative/.venv/bin/python3"
+            if isPython312(nxVenv) {
+                env["PY"] = nxVenv
+            } else {
+                let candidates = [
+                    "/opt/homebrew/bin/python3.13",
+                    "/opt/homebrew/bin/python3.12",
+                    "/opt/homebrew/opt/python@3.12/bin/python3.12",
+                    "/opt/homebrew/opt/python@3.12/bin/python3",
+                    "/opt/homebrew/opt/python@3.13/bin/python3.13",
+                    "/opt/homebrew/opt/python@3.13/bin/python3",
+                    "/opt/homebrew/bin/python3",
+                    "/usr/local/bin/python3.13",
+                    "/usr/local/bin/python3.12",
+                    "/usr/local/bin/python3",
+                    "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+                    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+                    "\(home)/.pyenv/shims/python3.12",
+                    "\(home)/.pyenv/shims/python3",
+                    "\(home)/.local/bin/python3.12",
+                    "\(home)/.local/bin/python3"
+                ]
+                for cand in candidates {
+                    if isPython312(cand) {
+                        env["PY"] = cand
+                        break
+                    }
+                }
+            }
         }
         proc.environment = env
         
@@ -426,7 +492,7 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var upToDateMessage: String? = nil
     
     var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1.1"
     }
     
     private var downloadTask: URLSessionDownloadTask?

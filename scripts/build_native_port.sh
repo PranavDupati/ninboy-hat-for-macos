@@ -6,7 +6,7 @@
 # ==============================================================================
 set -eo pipefail
 
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.dotnet:${PATH:-}"
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.dotnet:$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.pyenv/shims:/Library/Frameworks/Python.framework/Versions/Current/bin:${PATH:-}"
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
 SUPPORT_DIR="${SUPPORT_DIR:-$HOME/Library/Application Support/NinboyHat}"
@@ -99,27 +99,126 @@ find_or_setup_engine() {
     fi
 }
 
-# Discover or provision Python environment
+# Helper to verify Python >= 3.12 (Direct RomFS image builds require Python 3.12 or newer)
+is_py312() {
+    [ -n "$1" ] && [ -x "$1" ] && "$1" -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" 2>/dev/null
+}
+
+# Discover or provision Python environment (guaranteeing Python >= 3.12)
 find_or_setup_python() {
-    # 1. Existing explicit override or known venvs
-    for candidate in "$PY" "$HOME/nxnative/.venv/bin/python3" "$SUPPORT_DIR/venv/bin/python3"; do
-        if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-            PY="$candidate"
+    # 1. Check existing virtual environment, but ONLY if it runs Python >= 3.12
+    if [ -x "$SUPPORT_DIR/venv/bin/python3" ]; then
+        if is_py312 "$SUPPORT_DIR/venv/bin/python3"; then
+            PY="$SUPPORT_DIR/venv/bin/python3"
+            echo "  ✓ Using existing Python 3.12+ environment: $("$PY" --version 2>&1)"
             return 0
+        else
+            echo "  ! Existing environment at $SUPPORT_DIR/venv uses unsupported $("$SUPPORT_DIR/venv/bin/python3" --version 2>&1). Rebuilding with Python 3.12+..."
+            rm -rf "$SUPPORT_DIR/venv"
+        fi
+    fi
+
+    # 2. Check explicit PY override if passed and >= 3.12
+    if [ -n "$PY" ] && is_py312 "$PY"; then
+        echo "  ✓ Using specified Python: $("$PY" --version 2>&1) at $PY"
+        return 0
+    fi
+
+    # 3. Check nxnative local venv if >= 3.12
+    if [ -x "$HOME/nxnative/.venv/bin/python3" ] && is_py312 "$HOME/nxnative/.venv/bin/python3"; then
+        PY="$HOME/nxnative/.venv/bin/python3"
+        echo "  ✓ Using nxnative Python: $("$PY" --version 2>&1)"
+        return 0
+    fi
+
+    # 4. Search system for any installed Python 3.12, 3.13, 3.14, 3.15 interpreter
+    echo "==> Searching for Python 3.12+ on system..."
+    local CAND_PY=""
+    local SEARCH_PATHS=(
+        "/opt/homebrew/bin/python3.13"
+        "/opt/homebrew/bin/python3.12"
+        "/opt/homebrew/opt/python@3.12/bin/python3.12"
+        "/opt/homebrew/opt/python@3.12/bin/python3"
+        "/opt/homebrew/opt/python@3.13/bin/python3.13"
+        "/opt/homebrew/opt/python@3.13/bin/python3"
+        "/opt/homebrew/bin/python3"
+        "/usr/local/bin/python3.13"
+        "/usr/local/bin/python3.12"
+        "/usr/local/opt/python@3.12/bin/python3.12"
+        "/usr/local/opt/python@3.12/bin/python3"
+        "/usr/local/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+        "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
+        "$HOME/.pyenv/shims/python3.12"
+        "$HOME/.pyenv/shims/python3.13"
+        "$HOME/.pyenv/shims/python3"
+        "$HOME/.local/bin/python3.12"
+        "$HOME/.local/bin/python3.13"
+        "$HOME/.local/bin/python3"
+        "$HOME/.cargo/bin/python3"
+    )
+
+    for p in "${SEARCH_PATHS[@]}"; do
+        if is_py312 "$p"; then
+            CAND_PY="$p"
+            break
         fi
     done
 
-    # 2. Automatically provision isolated venv using uv or python3
-    echo "==> Setting up isolated Python environment in $SUPPORT_DIR/venv..."
-    mkdir -p "$SUPPORT_DIR"
-    if command -v uv >/dev/null 2>&1; then
-        uv venv "$SUPPORT_DIR/venv" >/dev/null
-        uv pip install --python "$SUPPORT_DIR/venv/bin/python3" zstandard pillow fonttools >/dev/null
-    else
-        python3 -m venv "$SUPPORT_DIR/venv"
-        "$SUPPORT_DIR/venv/bin/pip" install --quiet zstandard pillow fonttools
+    # Search PATH for versioned binaries
+    if [ -z "$CAND_PY" ]; then
+        for name in python3.15 python3.14 python3.13 python3.12 python3; do
+            local found
+            found="$(command -v "$name" 2>/dev/null || true)"
+            if [ -n "$found" ] && is_py312 "$found"; then
+                CAND_PY="$found"
+                break
+            fi
+        done
     fi
-    PY="$SUPPORT_DIR/venv/bin/python3"
+
+    # If Python 3.12+ found on system, create isolated venv with it
+    if [ -n "$CAND_PY" ]; then
+        echo "  ✓ Found compatible host Python: $("$CAND_PY" --version 2>&1) at $CAND_PY"
+        echo "==> Creating isolated environment in $SUPPORT_DIR/venv..."
+        mkdir -p "$SUPPORT_DIR"
+        "$CAND_PY" -m venv "$SUPPORT_DIR/venv"
+        "$SUPPORT_DIR/venv/bin/pip" install --quiet zstandard pillow fonttools
+        PY="$SUPPORT_DIR/venv/bin/python3"
+        return 0
+    fi
+
+    # 5. Fallback: If no Python 3.12+ exists on system, auto-download standalone uv
+    echo "  ! No local Python 3.12+ installation detected."
+    echo "==> Bootstrapping isolated Python 3.12 environment via standalone uv..."
+    mkdir -p "$SUPPORT_DIR/bin"
+    local UV_BIN="$SUPPORT_DIR/bin/uv"
+    if ! [ -x "$UV_BIN" ]; then
+        local ARCH
+        ARCH="$(uname -m)"
+        local UV_ARCH="aarch64"
+        if [ "$ARCH" != "arm64" ]; then UV_ARCH="x86_64"; fi
+        echo "  ⬇ Downloading uv toolchain ($UV_ARCH)..."
+        curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${UV_ARCH}-apple-darwin.tar.gz" | tar -xz -C "$SUPPORT_DIR/bin" --strip-components=1 uv 2>/dev/null || true
+        chmod +x "$UV_BIN" 2>/dev/null || true
+    fi
+
+    if [ -x "$UV_BIN" ]; then
+        echo "  ⬇ Provisioning standalone Python 3.12 & dependencies into $SUPPORT_DIR/venv..."
+        "$UV_BIN" venv --python 3.12 "$SUPPORT_DIR/venv"
+        "$UV_BIN" pip install --python "$SUPPORT_DIR/venv/bin/python3" zstandard pillow fonttools
+        PY="$SUPPORT_DIR/venv/bin/python3"
+        if is_py312 "$PY"; then
+            echo "  ✓ Successfully auto-provisioned: $("$PY" --version 2>&1)"
+            return 0
+        fi
+    fi
+
+    # 6. Final verification error if both failed
+    echo "✗ Error: Python 3.12 or newer is required to build Direct RomFS images."
+    echo "  Please install Python 3.12 by running: brew install python@3.12"
+    exit 1
 }
 
 doctor() {
@@ -158,16 +257,16 @@ doctor() {
 
     # Check Python environment & packages
     find_or_setup_python
-    if [ -x "$PY" ]; then
+    if [ -x "$PY" ] && is_py312 "$PY"; then
         if "$PY" -c "import zstandard, PIL, fontTools" >/dev/null 2>&1; then
-            echo "  ✓ Python 3 environment ($PY) has required packages: zstandard, pillow, fonttools"
+            echo "  ✓ Python 3.12+ environment ($PY, $("$PY" --version 2>&1)) ready with: zstandard, pillow, fonttools"
         else
             echo "  ! Warning: Python environment missing some packages. Installing..."
             "$PY" -m pip install --quiet zstandard pillow fonttools || true
             echo "  ✓ Installed required Python packages."
         fi
     else
-        echo "  ✗ Error: Python 3 could not be configured."
+        echo "  ✗ Error: Python 3.12 or newer is required (found $("$PY" --version 2>&1 || echo 'none'))."
         OK=0
     fi
 
