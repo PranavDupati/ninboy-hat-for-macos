@@ -77,6 +77,15 @@ index 3388072..ca56fdb 100644
  DM_FPS_HOLD	toggle	on/off	DM_GAME_FPS_HOLD	DM_GAME_FPS_TARGET!=0	Performance	Hold frames when late
 -DM_METAL_HUD	toggle	-	0	always	Performance	Performance HUD
 +DM_METAL_HUD	toggle	-	1	always	Performance	Performance HUD
+diff --git a/dm/gfx/nvn/dmsh_chain.h b/dm/gfx/nvn/dmsh_chain.h
+index ade1f76..474e47e 100644
+--- a/dm/gfx/nvn/dmsh_chain.h
++++ b/dm/gfx/nvn/dmsh_chain.h
+@@ -1,3 +1,3 @@
+ // Generated file (dm/gfx/tools/dmsh_chain.py --header): the B shader library translation chain version this source tree expects (default options), one for every game;
+ // the host loads only <library dir>/b-<V>/. Run dmsh_chain.py --header after changing the chain's tools and commit this file with the change
+-#define DMSH_CHAIN "dc815e0f38ca"
++#define DMSH_CHAIN "ec392e71dd07"
 diff --git a/dm/gfx/nvn/hle_nvn.c b/dm/gfx/nvn/hle_nvn.c
 index e9db9b4..89126ea 100644
 --- a/dm/gfx/nvn/hle_nvn.c
@@ -1016,7 +1025,7 @@ index aec4414..54254a1 100644
          if ignoreSaved { fputs("launcher: saved choices ignored (DM_SAVED_CHOICES=0)\n", stderr) }
          for s in settings {
 diff --git a/dm/mac/Launcher.swift b/dm/mac/Launcher.swift
-index 4a96434..c1b5a21 100644
+index 4a96434..6ab7b8b 100644
 --- a/dm/mac/Launcher.swift
 +++ b/dm/mac/Launcher.swift
 @@ -38,7 +38,6 @@ struct LauncherView: View {
@@ -1027,11 +1036,36 @@ index 4a96434..c1b5a21 100644
                      } footer: {
                          Text("Brings back all settings this game was tested with.")
                      }
+@@ -194,7 +193,6 @@ public func dmMacLauncher() -> Int32 {
+     fputs("launcher: \(file.settings.count) settings shown\n", stderr)
+     app.run()
+     CATransaction.flush()   // finish's order-out
+-    app.setActivationPolicy(.prohibited)   // the host is the game's app from here on
+     guard launcher.play else { fputs("launcher: quit without starting the game\n", stderr); return 0 }
+     model.apply()
+     return 1
 diff --git a/dm/mac/launcher.c b/dm/mac/launcher.c
-index f962fb6..086adac 100644
+index f962fb6..05a8690 100644
 --- a/dm/mac/launcher.c
 +++ b/dm/mac/launcher.c
-@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
+@@ -29,7 +29,6 @@
+ 
+ extern char **environ;
+ int dm_mac_launcher(void);   // Launcher.swift: 1 = Play (the settings are in the environment), 0 = the player quit, 2 = no window (apply the saved choices here)
+-static pid_t g_child;
+ static char *g_file_keys, *g_launch_keys;   // the variables the env files set, and the settings the launch environment set (DM_ENV_FILE_KEYS, DM_ENV_LAUNCH_KEYS)
+ 
+ static void add_key(char **list, const char *k) {   // a space-separated list of names
+@@ -38,8 +37,6 @@ static void add_key(char **list, const char *k) {   // a space-separated list of
+     free(*list); *list = s;
+ }
+ 
+-static void forward(int sig) { if (g_child > 0) kill(g_child, sig); }
+-
+ static int info_string(const char *key, char *out, size_t n) {   // a string key of the bundle's Info.plist
+     CFBundleRef b = CFBundleGetMainBundle(); if (!b) return 0;
+     CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+@@ -196,7 +193,7 @@ int main(int argc, char **argv) {
      for (CFIndex i = 0; rules && i < CFArrayGetCount(rules); i++) { char env[128]; if (rule_env(CFArrayGetValueAtIndex(rules, i), env, sizeof env) && getenv(env)) add_key(&g_launch_keys, env); }
      snprintf(p, sizeof p, "%s/env.txt", sup); env_file(p);
      snprintf(p, sizeof p, "%s/env.txt", dm); env_file(p);
@@ -1040,6 +1074,51 @@ index f962fb6..086adac 100644
      free(g_file_keys); free(g_launch_keys);
      int window = !(getenv("DM_LAUNCHER") && !strcmp(getenv("DM_LAUNCHER"), "0"));
      for (int i = 1; i < argc; i++) if (!strcmp(argv[i], "--no-launcher")) window = 0;
+@@ -216,18 +213,13 @@ int main(int argc, char **argv) {
+     setenv("DM_WINDOW", "1", 0); setenv("DM_AUDIO", "1", 0);
+     programs_table(contents, res, sup);
+     if (chdir(sup)) { fprintf(stderr, "[RED] launcher: cannot enter %s\n", sup); return 1; }
+-    struct sigaction sa = {.sa_handler = forward};   // no SA_RESTART: waitpid below sees EINTR and waits again
+-    sigemptyset(&sa.sa_mask);
+-    sigaction(SIGTERM, &sa, NULL); sigaction(SIGINT, &sa, NULL); sigaction(SIGHUP, &sa, NULL);
+     char *host_argv[] = {host, dm, NULL};
+-    int err = posix_spawn(&g_child, host, NULL, NULL, host_argv, environ);
+-    if (err) { fprintf(stderr, "[RED] launcher: cannot start %s: %s\n", host, strerror(err)); return 1; }
+-    int status;
+-    while (waitpid(g_child, &status, 0) < 0) if (errno != EINTR) return 1;
+-    // Cloud saves (DM_SAVE_SYNC, dm/host/save_sync.h): what the host committed and had not sent yet goes now, after a crash too (the committed save is whole whatever the host was doing)
+-    // DM_SAVE as the host had it: an env file or the launch environment may have set another folder than this app's own
+-    if (!save_sync_after_exit(getenv("DM_SAVE"), id)) fprintf(stderr, "launcher: the save did not reach the cloud; it goes at the next start\n");
+-    if (WIFSIGNALED(status)) { fprintf(stderr, "launcher: the host stopped on signal %d\n", WTERMSIG(status)); return 128 + WTERMSIG(status); }
+-    fprintf(stderr, "launcher: the host exited with %d\n", WEXITSTATUS(status));
+-    return WEXITSTATUS(status);
++    posix_spawnattr_t attr;
++    posix_spawnattr_init(&attr);
++    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC);
++    posix_spawn(NULL, host, NULL, &attr, host_argv, environ);
++    posix_spawnattr_destroy(&attr);
++    execve(host, host_argv, environ);
++    fprintf(stderr, "[RED] launcher: cannot exec %s: %s\n", host, strerror(errno));
++    return 1;
+ }
+diff --git a/dm/mac/pack_app.py b/dm/mac/pack_app.py
+index 5b86cf7..f2f6601 100755
+--- a/dm/mac/pack_app.py
++++ b/dm/mac/pack_app.py
+@@ -119,11 +119,11 @@ def settings_rules(listed):   # DMSettings: what the launcher accepts as each se
+ 
+ 
+ def info_plist(a, minos, icon):
+-    # LSSupportsGameMode off: macOS's Game Mode holds the GPU at its lowest clock while it is busy (docs/reference/frame-rate.md, macOS Game Mode holds the GPU at its lowest clock)
++    # LSSupportsGameMode: Enable macOS Game Mode for low-latency controller input and high scheduling priority
+     p = {'CFBundleName': a.name, 'CFBundleDisplayName': a.name, 'CFBundleIdentifier': a.bundle_id or f'org.nxnative.{a.title_id.lower()}',
+          'CFBundleVersion': a.version or '1.0', 'CFBundleShortVersionString': a.version or '1.0', 'CFBundlePackageType': 'APPL', 'CFBundleExecutable': EXE,
+          'CFBundleInfoDictionaryVersion': '6.0', 'LSMinimumSystemVersion': minos, 'LSArchitecturePriority': ['arm64'], 'NSHighResolutionCapable': True,
+-         'LSApplicationCategoryType': a.category or 'public.app-category.games', 'LSSupportsGameMode': False, 'DMTitleID': a.title_id.upper(), 'DMRomfsMarker': a.marker or '', 'DMLanguage': a.lang or 'en-US'}
++         'LSApplicationCategoryType': a.category or 'public.app-category.games', 'LSSupportsGameMode': True, 'GCSupportsGameMode': True, 'DMTitleID': a.title_id.upper(), 'DMRomfsMarker': a.marker or '', 'DMLanguage': a.lang or 'en-US'}
+     if icon: p['CFBundleIconFile'] = 'AppIcon'
+     if a.settings:
+         listed = json.loads(Path(a.settings).read_text(encoding='utf-8'))['settings']
 diff --git a/dm/tools/make_ext_font.py b/dm/tools/make_ext_font.py
 index 4c4d9ba..7711ba0 100644
 --- a/dm/tools/make_ext_font.py
