@@ -63,7 +63,7 @@ find_or_setup_engine() {
     # Sync bundled configs, shader lists, mods, and patches into the engine
     local RES="${BUNDLE_RESOURCES:-$(cd "$(dirname "$0")/.." && pwd)}"
     if [ ! -d "$RES/config" ] && [ -d "$(dirname "$0")/config" ]; then
-        RES="$(dirname "$0")"
+        RES="$(cd "$(dirname "$0")" && pwd)"
     fi
 
     local GAME_DIR="$REPO/dm/games/0400486024DEC000"
@@ -94,15 +94,81 @@ find_or_setup_engine() {
         cp -f "$RES/tools/"* "$REPO/dm/tools/" 2>/dev/null || true
     fi
 
-    # Apply Ninboy Hat engine patch if git repo and clean
+    # Apply Ninboy Hat engine patch if git repo
     if [ -f "$RES/patches/ninboy-hat-macos.patch" ] && [ -d "$REPO/.git" ]; then
-        (cd "$REPO" && git apply --check "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null && git apply "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || true)
+        if (cd "$REPO" && git apply --check --reverse "$RES/patches/ninboy-hat-macos.patch" >/dev/null 2>&1); then
+            echo "  ✓ Ninboy Hat macOS engine patch is already applied."
+        elif (cd "$REPO" && git apply --check "$RES/patches/ninboy-hat-macos.patch" >/dev/null 2>&1); then
+            echo "  ✓ Applying Ninboy Hat macOS engine patch..."
+            (cd "$REPO" && git apply "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || true)
+            echo "  ✓ Engine patch applied cleanly."
+        else
+            echo "  ! Attempting 3-way merge or relaxed application for engine patch..."
+            (cd "$REPO" && git apply -3 "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || git apply --reject "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || patch -p1 -N -s < "$RES/patches/ninboy-hat-macos.patch" 2>/dev/null || true)
+        fi
+    fi
+
+    # Guarantee DMSH_WANT_FILE argument-overflow fix is active in build_ipa_from_nsp.py & own_compilers.py
+    if [ -f "$REPO/scripts/build_ipa_from_nsp.py" ]; then
+        if ! grep -q "DMSH_WANT_FILE" "$REPO/scripts/build_ipa_from_nsp.py"; then
+            echo "  ✓ Ensuring DMSH_WANT_FILE ARG_MAX fix is active in build_ipa_from_nsp.py..."
+            python3 -c '
+path = "'"$REPO"'/scripts/build_ipa_from_nsp.py"
+with open(path, "r") as f: c = f.read()
+target = "run([py, repo / '\''dm/gfx/tools/own_compilers.py'\'', sh / '\''pkg'\'', out if seen else sh / '\''cache'\'', *(seen or ())], log, env=benv)"
+repl = """seen_args = list(seen or ())
+    if seen_args:
+        want_file = sh / "seen_keys.txt"
+        atomic_text(want_file, "\\n".join(seen_args) + "\\n")
+        benv["DMSH_WANT_FILE"] = str(want_file)
+        seen_args = []
+    run([py, repo / "dm/gfx/tools/own_compilers.py", sh / "pkg", out if seen else sh / "cache", *seen_args], log, env=benv)"""
+if target in c:
+    with open(path, "w") as f: f.write(c.replace(target, repl))
+' 2>/dev/null || true
+        fi
+    fi
+
+    if [ -f "$REPO/dm/gfx/tools/own_compilers.py" ]; then
+        if ! grep -q "DMSH_WANT_FILE" "$REPO/dm/gfx/tools/own_compilers.py"; then
+            echo "  ✓ Ensuring DMSH_WANT_FILE handling is active in own_compilers.py..."
+            python3 -c '
+path = "'"$REPO"'/dm/gfx/tools/own_compilers.py"
+with open(path, "r") as f: c = f.read()
+target = "sys.argv = [os.path.join(HERE, '\''dmsh_build.py'\''), *sys.argv[1:]]"
+repl = """extra = []
+    want_file = os.environ.get("DMSH_WANT_FILE")
+    if want_file and os.path.isfile(want_file):
+        with open(want_file) as f:
+            extra = [line.strip().split()[0] for line in f if line.strip() and not line.startswith("#")]
+    args = []
+    for a in sys.argv[1:]:
+        if a.startswith("@") and os.path.isfile(a[1:]):
+            with open(a[1:]) as f:
+                args.extend(line.strip().split()[0] for line in f if line.strip() and not line.startswith("#"))
+        else:
+            args.append(a)
+    sys.argv = [os.path.join(HERE, "dmsh_build.py"), *args[:2], *extra, *args[2:]]"""
+if target in c:
+    with open(path, "w") as f: f.write(c.replace(target, repl))
+' 2>/dev/null || true
+        fi
     fi
 }
 
 # Helper to verify Python >= 3.12 (Direct RomFS image builds require Python 3.12 or newer)
 is_py312() {
     [ -n "$1" ] && [ -x "$1" ] && "$1" -c "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)" 2>/dev/null
+}
+
+# Ensure all required translation engine packages are installed in the environment
+ensure_python_packages() {
+    local target_py="$1"
+    if ! "$target_py" -c "import zstandard, PIL, fontTools, lz4.block, capstone, nsz, zbic" >/dev/null 2>&1; then
+        echo "  ⬇ Installing/verifying engine Python dependencies in venv..."
+        "$target_py" -m pip install --quiet zstandard pillow fonttools lz4 "capstone>=5,<6" nsz zbic "backports.zstd; python_version < '3.14'" 2>/dev/null || \
+        "$target_py" -m pip install zstandard pillow fonttools lz4 "capstone>=5,<6" nsz zbic "backports.zstd; python_version < '3.14'" || true
+    fi
 }
 
 # Discover or provision Python environment (guaranteeing Python >= 3.12)
@@ -112,6 +178,7 @@ find_or_setup_python() {
         if is_py312 "$SUPPORT_DIR/venv/bin/python3"; then
             PY="$SUPPORT_DIR/venv/bin/python3"
             echo "  ✓ Using existing Python 3.12+ environment: $("$PY" --version 2>&1)"
+            ensure_python_packages "$PY"
             return 0
         else
             echo "  ! Existing environment at $SUPPORT_DIR/venv uses unsupported $("$SUPPORT_DIR/venv/bin/python3" --version 2>&1). Rebuilding with Python 3.12+..."
@@ -120,52 +187,70 @@ find_or_setup_python() {
     fi
 
     # 2. Check explicit PY override if passed and >= 3.12
+    local CAND_PY=""
     if [ -n "$PY" ] && is_py312 "$PY"; then
-        echo "  ✓ Using specified Python: $("$PY" --version 2>&1) at $PY"
-        return 0
+        if [ -f "$(dirname "$PY")/activate" ]; then
+            echo "  ✓ Using specified Python virtual environment: $("$PY" --version 2>&1) at $PY"
+            ensure_python_packages "$PY"
+            return 0
+        else
+            CAND_PY="$PY"
+        fi
     fi
 
     # 3. Check nxnative local venv if >= 3.12
-    if [ -x "$HOME/nxnative/.venv/bin/python3" ] && is_py312 "$HOME/nxnative/.venv/bin/python3"; then
+    if [ -z "$CAND_PY" ] && [ -x "$HOME/nxnative/.venv/bin/python3" ] && is_py312 "$HOME/nxnative/.venv/bin/python3"; then
         PY="$HOME/nxnative/.venv/bin/python3"
         echo "  ✓ Using nxnative Python: $("$PY" --version 2>&1)"
+        ensure_python_packages "$PY"
         return 0
     fi
 
     # 4. Search system for any installed Python 3.12, 3.13, 3.14, 3.15 interpreter
-    echo "==> Searching for Python 3.12+ on system..."
-    local CAND_PY=""
-    local SEARCH_PATHS=(
-        "/opt/homebrew/bin/python3.13"
-        "/opt/homebrew/bin/python3.12"
-        "/opt/homebrew/opt/python@3.12/bin/python3.12"
-        "/opt/homebrew/opt/python@3.12/bin/python3"
-        "/opt/homebrew/opt/python@3.13/bin/python3.13"
-        "/opt/homebrew/opt/python@3.13/bin/python3"
-        "/opt/homebrew/bin/python3"
-        "/usr/local/bin/python3.13"
-        "/usr/local/bin/python3.12"
-        "/usr/local/opt/python@3.12/bin/python3.12"
-        "/usr/local/opt/python@3.12/bin/python3"
-        "/usr/local/bin/python3"
-        "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
-        "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
-        "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
-        "$HOME/.pyenv/shims/python3.12"
-        "$HOME/.pyenv/shims/python3.13"
-        "$HOME/.pyenv/shims/python3"
-        "$HOME/.local/bin/python3.12"
-        "$HOME/.local/bin/python3.13"
-        "$HOME/.local/bin/python3"
-        "$HOME/.cargo/bin/python3"
-    )
+    if [ -z "$CAND_PY" ]; then
+        echo "==> Searching for Python 3.12+ on system..."
+        local SEARCH_PATHS=(
+            "/opt/homebrew/bin/python3.15"
+            "/opt/homebrew/bin/python3.14"
+            "/opt/homebrew/bin/python3.13"
+            "/opt/homebrew/bin/python3.12"
+            "/opt/homebrew/opt/python@3.13/bin/python3.13"
+            "/opt/homebrew/opt/python@3.13/bin/python3"
+            "/opt/homebrew/opt/python@3.12/bin/python3.12"
+            "/opt/homebrew/opt/python@3.12/bin/python3"
+            "/opt/homebrew/bin/python3"
+            "/usr/local/bin/python3.15"
+            "/usr/local/bin/python3.14"
+            "/usr/local/bin/python3.13"
+            "/usr/local/bin/python3.12"
+            "/usr/local/opt/python@3.12/bin/python3.12"
+            "/usr/local/opt/python@3.12/bin/python3"
+            "/usr/local/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/3.15/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3"
+            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
+            "$HOME/.pyenv/shims/python3.15"
+            "$HOME/.pyenv/shims/python3.14"
+            "$HOME/.pyenv/shims/python3.13"
+            "$HOME/.pyenv/shims/python3.12"
+            "$HOME/.pyenv/shims/python3"
+            "$HOME/.local/bin/python3.15"
+            "$HOME/.local/bin/python3.14"
+            "$HOME/.local/bin/python3.13"
+            "$HOME/.local/bin/python3.12"
+            "$HOME/.local/bin/python3"
+            "$HOME/.cargo/bin/python3"
+        )
 
-    for p in "${SEARCH_PATHS[@]}"; do
-        if is_py312 "$p"; then
-            CAND_PY="$p"
-            break
-        fi
-    done
+        for p in "${SEARCH_PATHS[@]}"; do
+            if is_py312 "$p"; then
+                CAND_PY="$p"
+                break
+            fi
+        done
+    fi
 
     # Search PATH for versioned binaries
     if [ -z "$CAND_PY" ]; then
@@ -182,11 +267,13 @@ find_or_setup_python() {
     # If Python 3.12+ found on system, create isolated venv with it
     if [ -n "$CAND_PY" ]; then
         echo "  ✓ Found compatible host Python: $("$CAND_PY" --version 2>&1) at $CAND_PY"
-        echo "==> Creating isolated environment in $SUPPORT_DIR/venv..."
-        mkdir -p "$SUPPORT_DIR"
-        "$CAND_PY" -m venv "$SUPPORT_DIR/venv"
-        "$SUPPORT_DIR/venv/bin/pip" install --quiet zstandard pillow fonttools
+        if [ ! -x "$SUPPORT_DIR/venv/bin/python3" ]; then
+            echo "==> Creating isolated environment in $SUPPORT_DIR/venv..."
+            mkdir -p "$SUPPORT_DIR"
+            "$CAND_PY" -m venv "$SUPPORT_DIR/venv"
+        fi
         PY="$SUPPORT_DIR/venv/bin/python3"
+        ensure_python_packages "$PY"
         return 0
     fi
 
@@ -208,7 +295,7 @@ find_or_setup_python() {
     if [ -x "$UV_BIN" ]; then
         echo "  ⬇ Provisioning standalone Python 3.12 & dependencies into $SUPPORT_DIR/venv..."
         "$UV_BIN" venv --python 3.12 "$SUPPORT_DIR/venv"
-        "$UV_BIN" pip install --python "$SUPPORT_DIR/venv/bin/python3" zstandard pillow fonttools
+        "$UV_BIN" pip install --python "$SUPPORT_DIR/venv/bin/python3" zstandard pillow fonttools lz4 "capstone>=5,<6" nsz zbic "backports.zstd; python_version < '3.14'"
         PY="$SUPPORT_DIR/venv/bin/python3"
         if is_py312 "$PY"; then
             echo "  ✓ Successfully auto-provisioned: $("$PY" --version 2>&1)"
@@ -259,12 +346,11 @@ doctor() {
     # Check Python environment & packages
     find_or_setup_python
     if [ -x "$PY" ] && is_py312 "$PY"; then
-        if "$PY" -c "import zstandard, PIL, fontTools" >/dev/null 2>&1; then
-            echo "  ✓ Python 3.12+ environment ($PY, $("$PY" --version 2>&1)) ready with: zstandard, pillow, fonttools"
+        ensure_python_packages "$PY"
+        if "$PY" -c "import zstandard, PIL, fontTools, lz4.block, capstone, nsz, zbic" >/dev/null 2>&1; then
+            echo "  ✓ Python 3.12+ environment ($PY, $("$PY" --version 2>&1)) ready with all packages: zstandard, pillow, fonttools, lz4, capstone, nsz, zbic"
         else
-            echo "  ! Warning: Python environment missing some packages. Installing..."
-            "$PY" -m pip install --quiet zstandard pillow fonttools || true
-            echo "  ✓ Installed required Python packages."
+            echo "  ! Warning: Python environment could not install some optional packages."
         fi
     else
         echo "  ✗ Error: Python 3.12 or newer is required (found $("$PY" --version 2>&1 || echo 'none'))."

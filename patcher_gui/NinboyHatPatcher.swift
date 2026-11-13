@@ -398,20 +398,32 @@ class PatcherModel: ObservableObject {
                 env["PY"] = nxVenv
             } else {
                 let candidates = [
+                    "/opt/homebrew/bin/python3.15",
+                    "/opt/homebrew/bin/python3.14",
                     "/opt/homebrew/bin/python3.13",
                     "/opt/homebrew/bin/python3.12",
-                    "/opt/homebrew/opt/python@3.12/bin/python3.12",
-                    "/opt/homebrew/opt/python@3.12/bin/python3",
                     "/opt/homebrew/opt/python@3.13/bin/python3.13",
                     "/opt/homebrew/opt/python@3.13/bin/python3",
+                    "/opt/homebrew/opt/python@3.12/bin/python3.12",
+                    "/opt/homebrew/opt/python@3.12/bin/python3",
                     "/opt/homebrew/bin/python3",
+                    "/usr/local/bin/python3.15",
+                    "/usr/local/bin/python3.14",
                     "/usr/local/bin/python3.13",
                     "/usr/local/bin/python3.12",
                     "/usr/local/bin/python3",
+                    "/Library/Frameworks/Python.framework/Versions/3.15/bin/python3",
+                    "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
                     "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
                     "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+                    "\(home)/.pyenv/shims/python3.15",
+                    "\(home)/.pyenv/shims/python3.14",
+                    "\(home)/.pyenv/shims/python3.13",
                     "\(home)/.pyenv/shims/python3.12",
                     "\(home)/.pyenv/shims/python3",
+                    "\(home)/.local/bin/python3.15",
+                    "\(home)/.local/bin/python3.14",
+                    "\(home)/.local/bin/python3.13",
                     "\(home)/.local/bin/python3.12",
                     "\(home)/.local/bin/python3"
                 ]
@@ -502,7 +514,7 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var upToDateMessage: String? = nil
     
     var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.1.1"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.2"
     }
     
     private var downloadTask: URLSessionDownloadTask?
