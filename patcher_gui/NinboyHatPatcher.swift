@@ -43,6 +43,7 @@ class PatcherModel: ObservableObject {
     @Published var zeldasLullabyFix: Bool = true
     @Published var hyruleTextureFix: Bool = true
     @Published var dispatchOverlap: Bool = true
+    @Published var kokiriPerfTweaks: Bool = true
     
     // Execution & Progress State
     @Published var isBuilding: Bool = false
@@ -113,6 +114,7 @@ class PatcherModel: ObservableObject {
         zeldasLullabyFix = true
         hyruleTextureFix = true
         dispatchOverlap = true
+        kokiriPerfTweaks = true
     }
     
     func syncSettings() {
@@ -144,6 +146,18 @@ class PatcherModel: ObservableObject {
         envTxt += "DM_NVN_DISPATCH_OVERLAP=\(dispatchOverlap ? "1" : "0")\n"
         envTxt += "DM_NVN_PREDICT=1\n"
         envTxt += "DM_PSO_WAITLOG=0\n"
+        
+        if kokiriPerfTweaks {
+            envTxt += "# Kokiri Forest & M1/M2 30 FPS Optimization Tweaks (PR #2577, #2574, #2573, #2526, #2559, #2441)\n"
+            envTxt += "DM_NVN_MESH_TGHINT=1\n"
+            envTxt += "DM_NVN_VIS_NEED=1\n"
+            envTxt += "DM_NVN_CUT_FIRST=1\n"
+            envTxt += "DM_NVN_CUT_FIRST_N=8\n"
+            envTxt += "DM_NVN_FAMILY_NOCOMPRESS=0\n"
+            envTxt += "DM_NVN_MFX_DIRECT=1\n"
+            envTxt += "DM_NVN_PASS_DEFER=1\n"
+            envTxt += "DM_NVN_ALLOC_CAP=16\n"
+        }
         
         try? envTxt.write(toFile: "\(repo)/mac_env.txt", atomically: true, encoding: .utf8)
         
@@ -514,7 +528,7 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var upToDateMessage: String? = nil
     
     var currentVersion: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.2"
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.3"
     }
     
     private var downloadTask: URLSessionDownloadTask?
@@ -742,6 +756,14 @@ struct PatcherMainView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         
+                        Text("BETA / EXPERIMENTAL")
+                            .font(.system(size: 9, weight: .bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.18))
+                            .foregroundStyle(.orange)
+                            .clipShape(Capsule())
+                        
                         if updater.updateAvailable {
                             Button {
                                 updater.showUpdateSheet = true
@@ -898,6 +920,7 @@ struct PatcherMainView: View {
                         Toggle("Zelda's Lullaby Crash Fix (NvPkg selector forwarding)", isOn: $model.zeldasLullabyFix)
                         Toggle("Hyrule Castle & Village Missing Textures Fix", isOn: $model.hyruleTextureFix)
                         Toggle("Overlapped Compute Dispatch (shaves 2-3 ms per frame)", isOn: $model.dispatchOverlap)
+                        Toggle("M1/M2 30 FPS Kokiri Forest Optimizations (SIMD hints, pass defer, early cut)", isOn: $model.kokiriPerfTweaks)
                         
                         HStack {
                             Text("Output directory")

@@ -44,6 +44,7 @@ cp -R "$SCRIPT_DIR/../config" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || t
 cp -R "$SCRIPT_DIR/../patches" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
 cp -R "$SCRIPT_DIR/../romfs_mods" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
 cp -R "$SCRIPT_DIR/../tools" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+cp -R "$SCRIPT_DIR/../scripts" "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
 
 echo "==> [3/4] Signing App Bundle (ad-hoc)..."
 codesign -f -s - "$APP_BUNDLE"

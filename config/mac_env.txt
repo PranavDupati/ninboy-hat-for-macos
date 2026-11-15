@@ -28,3 +28,20 @@ DM_ALIAS_SIZE=0x200000000
 DM_NVN_DISPATCH_OVERLAP=1
 DM_NVN_PREDICT=1
 DM_PSO_WAITLOG=0
+
+# Kokiri Forest & M1/M2 30 FPS Optimization Tweaks (PR #2577, #2574, #2573, #2526, #2559, #2441)
+# Task/Mesh SIMD-width threadgroup hints
+DM_NVN_MESH_TGHINT=1
+# Occlusion query counting skip when not reported
+DM_NVN_VIS_NEED=1
+# Early first segment cut (avoids GPU bubble at submission start)
+DM_NVN_CUT_FIRST=1
+DM_NVN_CUT_FIRST_N=8
+# Enable lossless resolution family compression
+DM_NVN_FAMILY_NOCOMPRESS=0
+# Direct MetalFX spatial upscale between R11G11B10F targets
+DM_NVN_MFX_DIRECT=1
+# Deferred light pass merge (merges 11 passes into 1 on Apple Silicon)
+DM_NVN_PASS_DEFER=1
+# Expanded command allocator pool for multi-batch submissions
+DM_NVN_ALLOC_CAP=16

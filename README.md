@@ -42,6 +42,15 @@ Native Apple Silicon (ARM64 / Metal 4) compilation enhancements, crash fixes, ke
    - Fixed an unrecognized selector exception (`-[NvPkg buffer]: unrecognized selector sent to instance`) occurring during texture view recycling by unwrapping packaged `MTLTexture` instances and implementing automatic selector forwarding.
 
 ### ⚡ Visual Fidelity & Performance Tweaks
+- **M1/M2 30 FPS Kokiri Forest Optimizations (v1.0.3 Beta / Experimental):**
+  - **Task / Mesh SIMD-Width Hints (PR #2577):** Task and mesh pipelines declare 32-thread threadgroups matching Apple Silicon SIMD execution width, allowing the Metal compiler to eliminate partial threadgroup guards (saves ~0.35 ms GPU time).
+  - **Occlusion Query Cull (PR #2574):** Skips counting occlusion query visibility samples when no later report reads them (saves ~0.2 ms GPU time).
+  - **Dynamic Resolution Family Lossless Compression (PR #2573):** Retains lossless attachment compression across resolution families, cutting load/store bandwidth in half (saves ~0.85 ms GPU time).
+  - **Early First Segment Commit (PR #2526):** Commits the first 8 draws of a submission immediately to prevent GPU bubbles at frame boundaries (saves ~0.85 ms GPU time).
+  - **Direct MetalFX Spatial Upscaling (PR #2559):** Executes MetalFX directly between R11G11B10F targets without redundant blit/copy passes (saves ~0.6–1.0 ms GPU time).
+  - **Deferred Pass Merge (PR #2441):** Automatically merges up to 11 consecutive light and post-process passes into a single encoder pass on Apple Silicon GPUs (saves ~2.9 ms GPU time).
+  - **Expanded Command Allocators & Target Heaps:** Expanded in-flight allocator pool to 32 buffers to prevent submit thread blocking in heavy areas like Kokiri Forest and Hyrule Field.
+  - **Potato Resolution Presets (960×540 → 720p):** Integrated `oot_res_overlay.py` into RomFS build pipeline, providing ultra-light 540p potato presets for smooth 60 FPS playback on low-power devices.
 - **Hyrule Castle & Village Missing Textures Fix:**
   - Resolved missing/transparent ground and wall textures in Hyrule Market and Castle by enabling `tex_flush_upload` and `tex_dirty_upload`, ensuring CPU-written terrain height and blend maps are properly committed to GPU memory.
   - Tuned texture memory disposal (`tex_release 1`) to retain required CPU-accessible pool buffers without visual corruption.
@@ -171,7 +180,8 @@ This project builds upon the groundbreaking reverse engineering and native trans
 
 - **[seedds/nxnative](https://github.com/seedds/nxnative)** — The foundational AArch64 translation layer and Switch HLE host architecture.
 - **[cheemu21/kid-with-sword-remake](https://github.com/cheemu21/kid-with-sword-remake)** — Game-specific HLE overrides, NVN2 translation, and platform adaptations.
-- **[adi0900/GreenKid-MV](https://github.com/adi0900/GreenKid-MV)** by **adi0900** — Core inspiration for automated Python environment sandboxing via `uv`, the preflight `--doctor` system diagnostics architecture, and automated repository sanitization checks.
+- **[adi0900/GreenKid-MV](https://github.com/adi0900/GreenKid-MV)** by **adi0900** — Performance overlay architecture (`oot_res_overlay.py`), RomFS resolution presets, and automated repository sandboxing.
+- **[r/macgaming Kokiri Forest 30 FPS Optimization Analysis](https://www.reddit.com/r/macgaming/comments/1xvevyh/update_from_22fps_to_locked_30fps_on_the_weakest/)** by the Reddit Mac Gaming community — Investigation and profiling of Apple Silicon M1 frame pacing bottlenecks and upstream PR identification.
 - **[UzenUPoZiTiV4ik/fsr4-native-macos](https://github.com/UzenUPoZiTiV4ik/fsr4-native-macos)** by **PoZiTiV4ik** ([@UzenUPoZiTiV4ik](https://github.com/UzenUPoZiTiV4ik)) and contributors ([@fourlexboehm](https://github.com/fourlexboehm), [@d45h71](https://github.com/d45h71)) — The native Apple Silicon Metal implementation of AMD FidelityFX Super Resolution 4 (FSR 4.1.2 INT8 ML upscaler & frame generation pipeline).
 - **[@itsawful911 on X](https://x.com/itsawful911/status/2119149308444565564)** and the **Reddit `r/SwitchPirates2`** community — Performance tuning research, shader pipeline discovery, and stutter mitigation analysis.
 - **Apple Developer** — [Metal & MetalFX Documentation](https://developer.apple.com/metal/) for spatial upscaling and frame interpolation APIs.

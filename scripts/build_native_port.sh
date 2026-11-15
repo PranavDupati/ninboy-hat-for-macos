@@ -94,6 +94,11 @@ find_or_setup_engine() {
         cp -f "$RES/tools/"* "$REPO/dm/tools/" 2>/dev/null || true
     fi
 
+    if [ -d "$RES/scripts" ]; then
+        mkdir -p "$REPO/scripts"
+        cp -f "$RES/scripts/"* "$REPO/scripts/" 2>/dev/null || true
+    fi
+
     # Apply Ninboy Hat engine patch if git repo
     if [ -f "$RES/patches/ninboy-hat-macos.patch" ] && [ -d "$REPO/.git" ]; then
         if (cd "$REPO" && git apply --check --reverse "$RES/patches/ninboy-hat-macos.patch" >/dev/null 2>&1); then
@@ -416,11 +421,15 @@ build_base() {
 }
 
 build_overlays() {
-    echo "==> [2/3] Generating Flat Resolution Overlays (720p Handheld / 1080p Docked)" | tee -a "$LOG"
+    echo "==> [2/3] Generating Flat & Potato Resolution Overlays (720p Handheld / 1080p Docked / Potato 540p)" | tee -a "$LOG"
     local V="$WORK/extract/v131072"
-    mkdir -p "$V/romfs_overlay/handheld" "$V/romfs_overlay/docked"
-    "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/handheld" 0.666667 - flat 2>&1 | tee -a "$LOG"
-    "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/docked" 0.9375 - flat 2>&1 | tee -a "$LOG"
+    mkdir -p "$V/romfs_overlay/handheld" "$V/romfs_overlay/docked" "$V/romfs_overlay/potato-handheld" "$V/romfs_overlay/potato-docked"
+    if [ -f "$REPO/scripts/oot_res_overlay.py" ]; then
+        "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/handheld" 0.666667 - flat 2>&1 | tee -a "$LOG" || true
+        "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/docked" 0.9375 - flat 2>&1 | tee -a "$LOG" || true
+        "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/potato-handheld" 0.5 - flat 2>&1 | tee -a "$LOG" || true
+        "$PY" "$REPO/scripts/oot_res_overlay.py" "$V/RomFS.img" "$V/romfs_overlay/potato-docked" 0.75 - flat 2>&1 | tee -a "$LOG" || true
+    fi
 }
 
 package_app() {
