@@ -519,6 +519,18 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
     @Published var releaseUrl: URL? = nil
     @Published var downloadUrl: URL? = nil
     
+    // Release channel: "stable" or "beta"
+    @Published var updateChannel: String = {
+        if let saved = UserDefaults.standard.string(forKey: "ninboy_update_channel") {
+            return saved
+        }
+        let ver = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.3"
+        return (ver.lowercased().contains("beta") || ver == "1.0.3") ? "beta" : "stable"
+    }()
+    
+    @Published var isTargetBeta: Bool = false
+    @Published var isDowngrade: Bool = false
+    
     @Published var isDownloading: Bool = false
     @Published var downloadProgress: Double = 0.0
     @Published var updateStatus: String = ""
@@ -531,6 +543,14 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.3"
     }
     
+    var isCurrentBeta: Bool {
+        currentVersion.lowercased().contains("beta") || currentVersion == "1.0.3"
+    }
+    
+    func saveChannel() {
+        UserDefaults.standard.set(updateChannel, forKey: "ninboy_update_channel")
+    }
+    
     private var downloadTask: URLSessionDownloadTask?
     
     func checkForUpdates(userInitiated: Bool = false) {
@@ -538,7 +558,7 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         isChecking = true
         updateError = nil
         
-        guard let url = URL(string: "https://api.github.com/repos/PranavDupati/ninboy-hat-for-macos/releases/latest") else {
+        guard let url = URL(string: "https://api.github.com/repos/PranavDupati/ninboy-hat-for-macos/releases") else {
             isChecking = false
             return
         }
@@ -561,23 +581,42 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 }
                 
                 guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let tag = json["tag_name"] as? String else {
+                      let releases = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                      !releases.isEmpty else {
                     if userInitiated {
-                        self.updateError = "Could not parse latest release from GitHub."
+                        self.updateError = "Could not parse releases from GitHub."
                     }
                     return
                 }
                 
+                // Select target release based on user channel preference
+                var targetRelease: [String: Any]? = nil
+                if self.updateChannel == "stable" {
+                    targetRelease = releases.first(where: { ($0["prerelease"] as? Bool) == false })
+                } else {
+                    targetRelease = releases.first
+                }
+                
+                guard let target = targetRelease,
+                      let tag = target["tag_name"] as? String else {
+                    if userInitiated {
+                        self.updateError = "No matching releases found on the \(self.updateChannel) channel."
+                    }
+                    return
+                }
+                
+                let isPrerelease = (target["prerelease"] as? Bool) ?? false
+                self.isTargetBeta = isPrerelease
                 let cleanTag = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
                 self.latestVersion = cleanTag
-                self.releaseNotes = json["body"] as? String ?? "No release notes provided."
-                if let htmlStr = json["html_url"] as? String, let u = URL(string: htmlStr) {
+                self.releaseNotes = target["body"] as? String ?? "No release notes provided."
+                if let htmlStr = target["html_url"] as? String, let u = URL(string: htmlStr) {
                     self.releaseUrl = u
                 }
                 
                 // Find ZIP asset
-                if let assets = json["assets"] as? [[String: Any]] {
+                self.downloadUrl = nil
+                if let assets = target["assets"] as? [[String: Any]] {
                     for asset in assets {
                         if let name = asset["name"] as? String,
                            let dlStr = asset["browser_download_url"] as? String,
@@ -589,13 +628,31 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
                     }
                 }
                 
-                if self.isVersion(cleanTag, greaterThan: self.currentVersion) {
+                let comp = self.compareVersions(cleanTag, self.currentVersion)
+                if comp == .orderedDescending {
                     self.updateAvailable = true
+                    self.isDowngrade = false
                     self.showUpdateSheet = true
+                } else if comp == .orderedAscending {
+                    if self.updateChannel == "stable" {
+                        self.updateAvailable = true
+                        self.isDowngrade = true
+                        if userInitiated {
+                            self.showUpdateSheet = true
+                        }
+                    } else {
+                        self.updateAvailable = false
+                        self.isDowngrade = false
+                        if userInitiated {
+                            self.upToDateMessage = "Ninboy Hat Patcher is up to date (v\(self.currentVersion))."
+                        }
+                    }
                 } else {
                     self.updateAvailable = false
+                    self.isDowngrade = false
                     if userInitiated {
-                        self.upToDateMessage = "Ninboy Hat Patcher is up to date (v\(self.currentVersion))."
+                        let chName = self.updateChannel == "beta" ? "Beta" : "Stable"
+                        self.upToDateMessage = "Ninboy Hat Patcher is up to date on the \(chName) channel (v\(self.currentVersion))."
                     }
                 }
             }
@@ -711,17 +768,17 @@ class UpdateManager: NSObject, ObservableObject, URLSessionDownloadDelegate {
         }
     }
     
-    private func isVersion(_ v1: String, greaterThan v2: String) -> Bool {
-        let parts1 = v1.components(separatedBy: ".").compactMap { Int($0) }
-        let parts2 = v2.components(separatedBy: ".").compactMap { Int($0) }
+    func compareVersions(_ v1: String, _ v2: String) -> ComparisonResult {
+        let parts1 = v1.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        let parts2 = v2.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
         let maxCount = max(parts1.count, parts2.count)
         for i in 0..<maxCount {
             let p1 = i < parts1.count ? parts1[i] : 0
             let p2 = i < parts2.count ? parts2[i] : 0
-            if p1 > p2 { return true }
-            if p1 < p2 { return false }
+            if p1 > p2 { return .orderedDescending }
+            if p1 < p2 { return .orderedAscending }
         }
-        return false
+        return .orderedSame
     }
 }
 
@@ -756,27 +813,37 @@ struct PatcherMainView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         
-                        Text("BETA / EXPERIMENTAL")
-                            .font(.system(size: 9, weight: .bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.18))
-                            .foregroundStyle(.orange)
-                            .clipShape(Capsule())
+                        if updater.updateChannel == "beta" {
+                            Text("BETA CHANNEL")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.18))
+                                .foregroundStyle(.orange)
+                                .clipShape(Capsule())
+                        } else {
+                            Text("STABLE")
+                                .font(.system(size: 9, weight: .bold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.15))
+                                .foregroundStyle(.blue)
+                                .clipShape(Capsule())
+                        }
                         
                         if updater.updateAvailable {
                             Button {
                                 updater.showUpdateSheet = true
                             } label: {
                                 HStack(spacing: 4) {
-                                    Image(systemName: "arrow.down.circle.fill")
-                                    Text("v\(updater.latestVersion) Available")
+                                    Image(systemName: updater.isDowngrade ? "arrow.down.right.circle.fill" : "arrow.down.circle.fill")
+                                    Text(updater.isDowngrade ? "Switch to v\(updater.latestVersion) Stable" : "v\(updater.latestVersion) Available")
                                 }
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
-                                .background(Capsule().fill(Color.blue))
+                                .background(Capsule().fill(updater.isDowngrade ? Color.purple : Color.blue))
                             }
                             .buttonStyle(.plain)
                         }
@@ -934,6 +1001,58 @@ struct PatcherMainView: View {
                             model.resetToDefaults()
                         }
                     }
+                }
+                
+                // Section: App Updates & Release Channel
+                Section {
+                    Picker("Update channel", selection: Binding(
+                        get: { updater.updateChannel },
+                        set: { newVal in
+                            updater.updateChannel = newVal
+                            updater.saveChannel()
+                            updater.checkForUpdates(userInitiated: true)
+                        }
+                    )) {
+                        Text("Stable (Recommended)").tag("stable")
+                        Text("Beta (Experimental performance builds)").tag("beta")
+                    }
+                    
+                    HStack {
+                        Text("Installed version")
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Text("v\(updater.currentVersion)")
+                                .foregroundStyle(.secondary)
+                            if updater.isCurrentBeta {
+                                Text("BETA")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Color.orange.opacity(0.18))
+                                    .foregroundStyle(.orange)
+                                    .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    
+                    HStack {
+                        Text("Check for updates")
+                        Spacer()
+                        if updater.isChecking {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Button("Check Now") {
+                                updater.checkForUpdates(userInitiated: true)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    Text(updater.updateChannel == "beta"
+                         ? "Beta channel receives early preview builds with experimental M1/M2 performance optimizations."
+                         : "Stable channel only receives verified, fully tested releases (e.g. v1.0.2).")
                 }
                 
                 // Section: Progress & Status
@@ -1103,19 +1222,36 @@ struct UpdateSheetView: View {
             HStack(spacing: 14) {
                 ZStack {
                     Circle()
-                        .fill(Color.blue.opacity(0.12))
+                        .fill((updater.isDowngrade ? Color.purple : (updater.isTargetBeta ? Color.orange : Color.blue)).opacity(0.12))
                         .frame(width: 48, height: 48)
-                    Image(systemName: "sparkles")
+                    Image(systemName: updater.isDowngrade ? "arrow.down.right.circle.fill" : (updater.isTargetBeta ? "bolt.badge.clock.fill" : "sparkles"))
                         .font(.system(size: 24))
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(updater.isDowngrade ? Color.purple : (updater.isTargetBeta ? Color.orange : Color.blue))
                 }
                 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Update Available")
-                        .font(.headline)
-                    Text("Version \(updater.latestVersion) is now available (you have v\(updater.currentVersion)).")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Text(updater.isDowngrade ? "Switch to Stable Channel" : "Update Available")
+                            .font(.headline)
+                        
+                        Text(updater.isTargetBeta ? "BETA" : "STABLE")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background((updater.isTargetBeta ? Color.orange : Color.blue).opacity(0.18))
+                            .foregroundStyle(updater.isTargetBeta ? Color.orange : Color.blue)
+                            .clipShape(Capsule())
+                    }
+                    
+                    if updater.isDowngrade {
+                        Text("You are on v\(updater.currentVersion) (Beta). Switch to tested stable v\(updater.latestVersion).")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Version \(updater.latestVersion) \(updater.isTargetBeta ? "(Beta)" : "") is available (you have v\(updater.currentVersion)).")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
             }
@@ -1169,7 +1305,7 @@ struct UpdateSheetView: View {
                 }
                 .disabled(updater.isDownloading)
                 
-                Button(updater.isDownloading ? "Updating..." : "Download & Install") {
+                Button(updater.isDownloading ? "Updating..." : (updater.isDowngrade ? "Switch to Stable v\(updater.latestVersion)" : "Download & Install")) {
                     updater.downloadAndInstallUpdate()
                 }
                 .buttonStyle(.borderedProminent)
